@@ -125,7 +125,9 @@ runs:
         fi
 
         # --- Fix fs/super.c header for SUSFS patch compatibility ---
-        # SUSFS patch Hunk #1 expects:
+        # SUSFS patch Hunk #1 expects this exact contiguous sequence:
+        #   #include <linux/lockdep.h>
+        #   #include <linux/user_namespace.h>
         #   #include <linux/fs_context.h>
         #   #include <uapi/linux/mount.h>
         #   #include "internal.h"
@@ -133,8 +135,8 @@ runs:
         #   static int thaw_super_locked(...)
         # Newer Android kernels (>= 2026-07) insert extra includes like
         # #include <trace/hooks/fs.h> between internal.h and thaw_super_locked,
-        # and may reorder/drop includes. We detect, print diagnostics, and
-        # rearrange to restore the expected context.
+        # breaking patch context. We detect, print diagnostics, and rearrange
+        # to restore the expected contiguous context.
         python3 - <<'PYEOF'
         path = "fs/super.c"
         with open(path) as f:
@@ -147,7 +149,7 @@ runs:
         um = has("#include <uapi/linux/mount.h>")
         ih = has('#include "internal.h"')
         print(f"[super.c] fs_context.h={fc} uapi/mount.h={um} internal.h={ih}")
-        print("--- fs/super.c first 60 lines ---")
+        print("--- fs/super.c first 60 lines (before fix) ---")
         for i, l in enumerate(lines[:60], 1):
             print(f"{i:3d}: {l}")
         print("--- end ---")
@@ -180,34 +182,55 @@ runs:
             else:
                 print("[super.c] WARNING: no anchor line found for include insertion")
 
-        # Step 2: SUSFS patch expects "#include \"internal.h\"" immediately
-        # followed by a blank line and then "static int thaw_super_locked".
-        # Newer Android kernels insert extra includes (e.g. trace/hooks/fs.h)
-        # between them, breaking patch context. Move any non-blank lines
-        # between internal.h and thaw_super_locked to before internal.h, and
-        # ensure exactly one blank line separates internal.h from thaw_super_locked.
+        # Step 2: Move any non-blank lines between internal.h and
+        # thaw_super_locked to BEFORE lockdep.h, and normalize to exactly one
+        # blank line between internal.h and thaw_super_locked. This makes the
+        # full expected context sequence contiguous so patch can match it.
         internal_idx = None
         thaw_idx = None
+        lockdep_idx = None
         for i, l in enumerate(lines):
             if '#include "internal.h"' in l and internal_idx is None:
                 internal_idx = i
             if "static int thaw_super_locked" in l and thaw_idx is None:
                 thaw_idx = i
+            if "#include <linux/lockdep.h>" in l and lockdep_idx is None:
+                lockdep_idx = i
 
         if internal_idx is not None and thaw_idx is not None and thaw_idx > internal_idx + 2:
             extra = []
             for i in range(internal_idx + 1, thaw_idx):
                 if lines[i].strip():
                     extra.append(lines[i])
-            if extra:
-                # Rebuild: before internal.h + extra lines + internal.h + one blank + from thaw_super_locked onward
-                new_lines = lines[:internal_idx] + extra + [lines[internal_idx], ""] + lines[thaw_idx:]
-                lines = new_lines
-                print(f"[super.c] moved {len(extra)} line(s) from after internal.h to before it:")
-                for e in extra:
-                    print(f"  {e}")
+            if extra and lockdep_idx is not None:
+                # Rebuild: up to and including internal.h + one blank + from thaw_super_locked onward.
+                # This drops everything between internal.h and thaw_super_locked (extra includes
+                # and any extra blank lines), normalizing to exactly one blank line.
+                new_lines = lines[:internal_idx + 1] + [""] + lines[thaw_idx:]
+                # Re-find lockdep position (it's before internal_idx so should be unchanged)
+                new_lockdep = None
+                for j, l in enumerate(new_lines):
+                    if "#include <linux/lockdep.h>" in l:
+                        new_lockdep = j
+                        break
+                if new_lockdep is not None:
+                    for e in reversed(extra):
+                        new_lines.insert(new_lockdep, e)
+                    lines = new_lines
+                    print(f"[super.c] moved {len(extra)} line(s) to before lockdep.h, normalized blank line:")
+                    for e in extra:
+                        print(f"  {e}")
+                else:
+                    print("[super.c] WARNING: could not re-find lockdep.h after rebuild")
+            else:
+                print(f"[super.c] Step 2 skipped: extra={extra}, lockdep_idx={lockdep_idx}")
 
-        # Write back if anything changed
+        # Print final state for verification
+        print("--- fs/super.c first 60 lines (after fix) ---")
+        for i, l in enumerate(lines[:60], 1):
+            print(f"{i:3d}: {l}")
+        print("--- end ---")
+
         with open(path, "w") as f:
             f.write("\n".join(lines))
         print("[super.c] header fix complete")
