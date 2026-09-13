@@ -125,13 +125,16 @@ runs:
         fi
 
         # --- Fix fs/super.c header for SUSFS patch compatibility ---
-        # SUSFS patch Hunk #1 expects this exact include sequence:
+        # SUSFS patch Hunk #1 expects:
         #   #include <linux/fs_context.h>
         #   #include <uapi/linux/mount.h>
         #   #include "internal.h"
-        # Newer Android kernels may have dropped or reordered these includes.
-        # Detect what's present, print diagnostics, and ensure the three key
-        # lines exist consecutively after fs_context.h so patch context matches.
+        #   <blank>
+        #   static int thaw_super_locked(...)
+        # Newer Android kernels (>= 2026-07) insert extra includes like
+        # #include <trace/hooks/fs.h> between internal.h and thaw_super_locked,
+        # and may reorder/drop includes. We detect, print diagnostics, and
+        # rearrange to restore the expected context.
         python3 - <<'PYEOF'
         path = "fs/super.c"
         with open(path) as f:
@@ -149,9 +152,9 @@ runs:
             print(f"{i:3d}: {l}")
         print("--- end ---")
 
-        # If any of the three key includes is missing, insert the missing
-        # ones right after the fs_context.h line (or after lockdep.h if
-        # fs_context.h is also missing).
+        # Step 1: If any of the three key includes is missing, insert the
+        # missing ones right after the fs_context.h line (or after lockdep.h
+        # if fs_context.h is also missing).
         if not (fc and um and ih):
             anchor = None
             for i, l in enumerate(lines):
@@ -173,11 +176,41 @@ runs:
                     additions.append('#include "internal.h"')
                 for a in reversed(additions):
                     lines.insert(anchor + 1, a)
-                with open(path, "w") as f:
-                    f.write("\n".join(lines))
                 print(f"[super.c] inserted missing includes: {additions}")
             else:
                 print("[super.c] WARNING: no anchor line found for include insertion")
+
+        # Step 2: SUSFS patch expects "#include \"internal.h\"" immediately
+        # followed by a blank line and then "static int thaw_super_locked".
+        # Newer Android kernels insert extra includes (e.g. trace/hooks/fs.h)
+        # between them, breaking patch context. Move any non-blank lines
+        # between internal.h and thaw_super_locked to before internal.h, and
+        # ensure exactly one blank line separates internal.h from thaw_super_locked.
+        internal_idx = None
+        thaw_idx = None
+        for i, l in enumerate(lines):
+            if '#include "internal.h"' in l and internal_idx is None:
+                internal_idx = i
+            if "static int thaw_super_locked" in l and thaw_idx is None:
+                thaw_idx = i
+
+        if internal_idx is not None and thaw_idx is not None and thaw_idx > internal_idx + 2:
+            extra = []
+            for i in range(internal_idx + 1, thaw_idx):
+                if lines[i].strip():
+                    extra.append(lines[i])
+            if extra:
+                # Rebuild: before internal.h + extra lines + internal.h + one blank + from thaw_super_locked onward
+                new_lines = lines[:internal_idx] + extra + [lines[internal_idx], ""] + lines[thaw_idx:]
+                lines = new_lines
+                print(f"[super.c] moved {len(extra)} line(s) from after internal.h to before it:")
+                for e in extra:
+                    print(f"  {e}")
+
+        # Write back if anything changed
+        with open(path, "w") as f:
+            f.write("\n".join(lines))
+        print("[super.c] header fix complete")
         PYEOF
 
     - name: Apply Android 16 6.12 Fake Patches
