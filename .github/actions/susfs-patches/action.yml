@@ -124,22 +124,61 @@ runs:
           sed -i '/^#include <linux\/sched\/sysctl.h>$/a #include <linux/zswap.h>' mm/memory.c
         fi
 
-        # SUSFS patch (50_add_susfs_in_gki-android15-6.6.patch) expects
-        # #include <linux/fs_context.h> in fs/super.c header (between
-        # user_namespace.h and uapi/linux/mount.h). Newer Android kernels
-        # (>= 2026-07) dropped this direct include, causing Hunk #1 of the
-        # super.c section to fail. Re-add it if missing so patch context matches.
-        if ! grep -q '^#include <linux/fs_context.h>$' fs/super.c; then
-          if grep -q '^#include <linux/user_namespace.h>$' fs/super.c; then
-            sed -i '/^#include <linux\/user_namespace.h>$/a #include <linux/fs_context.h>' fs/super.c
-            echo "Re-added #include <linux/fs_context.h> to fs/super.c (after user_namespace.h)"
-          elif grep -q '^#include <linux/lockdep.h>$' fs/super.c; then
-            sed -i '/^#include <linux\/lockdep.h>$/a #include <linux/fs_context.h>' fs/super.c
-            echo "Re-added #include <linux/fs_context.h> to fs/super.c (after lockdep.h)"
-          else
-            echo "WARNING: could not locate insertion point for fs_context.h in fs/super.c"
-          fi
-        fi
+        # --- Fix fs/super.c header for SUSFS patch compatibility ---
+        # SUSFS patch Hunk #1 expects this exact include sequence:
+        #   #include <linux/fs_context.h>
+        #   #include <uapi/linux/mount.h>
+        #   #include "internal.h"
+        # Newer Android kernels may have dropped or reordered these includes.
+        # Detect what's present, print diagnostics, and ensure the three key
+        # lines exist consecutively after fs_context.h so patch context matches.
+        python3 - <<'PYEOF'
+        path = "fs/super.c"
+        with open(path) as f:
+            lines = f.read().split("\n")
+
+        def has(s):
+            return any(s in l for l in lines)
+
+        fc = has("#include <linux/fs_context.h>")
+        um = has("#include <uapi/linux/mount.h>")
+        ih = has('#include "internal.h"')
+        print(f"[super.c] fs_context.h={fc} uapi/mount.h={um} internal.h={ih}")
+        print("--- fs/super.c first 60 lines ---")
+        for i, l in enumerate(lines[:60], 1):
+            print(f"{i:3d}: {l}")
+        print("--- end ---")
+
+        # If any of the three key includes is missing, insert the missing
+        # ones right after the fs_context.h line (or after lockdep.h if
+        # fs_context.h is also missing).
+        if not (fc and um and ih):
+            anchor = None
+            for i, l in enumerate(lines):
+                if "#include <linux/fs_context.h>" in l:
+                    anchor = i
+                    break
+            if anchor is None:
+                for i, l in enumerate(lines):
+                    if "#include <linux/lockdep.h>" in l:
+                        anchor = i
+                        break
+            if anchor is not None:
+                additions = []
+                if not fc:
+                    additions.append("#include <linux/fs_context.h>")
+                if not um:
+                    additions.append("#include <uapi/linux/mount.h>")
+                if not ih:
+                    additions.append('#include "internal.h"')
+                for a in reversed(additions):
+                    lines.insert(anchor + 1, a)
+                with open(path, "w") as f:
+                    f.write("\n".join(lines))
+                print(f"[super.c] inserted missing includes: {additions}")
+            else:
+                print("[super.c] WARNING: no anchor line found for include insertion")
+        PYEOF
 
     - name: Apply Android 16 6.12 Fake Patches
       shell: bash
