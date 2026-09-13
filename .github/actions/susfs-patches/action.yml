@@ -255,7 +255,11 @@ runs:
       shell: bash
       working-directory: ${{ github.workspace }}/kernel/common
       run: |
-        patch -p1 < 50_add_susfs_in_gki-${{ inputs.version }}.patch
+        # Use git apply with 3-way merge instead of plain patch.
+        # --3way: use blob hashes in the patch index line to do a 3-way merge,
+        #         which can auto-resolve context changes that plain patch cannot.
+        # --recount: don't trust line counts in the hunk header, recount from context.
+        git apply --3way --recount 50_add_susfs_in_gki-${{ inputs.version }}.patch
 
         # SUSFS's OPEN_REDIRECT code unconditionally calls VMA_PAD_START(), which
         # only exists on GKI branches that carry Google's page-size-migration
