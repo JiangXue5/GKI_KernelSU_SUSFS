@@ -124,6 +124,23 @@ runs:
           sed -i '/^#include <linux\/sched\/sysctl.h>$/a #include <linux/zswap.h>' mm/memory.c
         fi
 
+        # SUSFS patch (50_add_susfs_in_gki-android15-6.6.patch) expects
+        # #include <linux/fs_context.h> in fs/super.c header (between
+        # user_namespace.h and uapi/linux/mount.h). Newer Android kernels
+        # (>= 2026-07) dropped this direct include, causing Hunk #1 of the
+        # super.c section to fail. Re-add it if missing so patch context matches.
+        if ! grep -q '^#include <linux/fs_context.h>$' fs/super.c; then
+          if grep -q '^#include <linux/user_namespace.h>$' fs/super.c; then
+            sed -i '/^#include <linux\/user_namespace.h>$/a #include <linux/fs_context.h>' fs/super.c
+            echo "Re-added #include <linux/fs_context.h> to fs/super.c (after user_namespace.h)"
+          elif grep -q '^#include <linux/lockdep.h>$' fs/super.c; then
+            sed -i '/^#include <linux\/lockdep.h>$/a #include <linux/fs_context.h>' fs/super.c
+            echo "Re-added #include <linux/fs_context.h> to fs/super.c (after lockdep.h)"
+          else
+            echo "WARNING: could not locate insertion point for fs_context.h in fs/super.c"
+          fi
+        fi
+
     - name: Apply Android 16 6.12 Fake Patches
       shell: bash
       if: inputs.version == 'android16-6.12'
