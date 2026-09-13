@@ -143,6 +143,19 @@ runs:
       shell: bash
       working-directory: ${{ github.workspace }}/kernel/common
       run: |
+        # The kernel repo is shallow-cloned (--depth=1) by download-kernel to
+        # save time and disk. But git apply --3way needs the original file blobs
+        # referenced in the patch's index lines to perform 3-way merging. Without
+        # them, --3way falls back to direct application and fails on context drift
+        # (e.g. trace/hooks/fs.h inserted in fs/super.c). Unshallow just this one
+        # repo so --3way has the blobs it needs; other repos stay shallow.
+        echo "Unshallowing kernel/common to enable git apply --3way..."
+        if git rev-parse --is-shallow-repository | grep -q true; then
+          git fetch --unshallow --tags || echo "WARNING: unshallow failed, continuing with shallow history"
+        else
+          echo "Repository is already full (not shallow), skipping unshallow."
+        fi
+
         # Use git apply with 3-way merge instead of plain patch.
         # --3way: use blob hashes in the patch index line to do a 3-way merge,
         #         which can auto-resolve context changes that plain patch cannot.
