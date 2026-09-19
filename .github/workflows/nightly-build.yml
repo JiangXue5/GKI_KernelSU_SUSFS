@@ -13,10 +13,21 @@ jobs:
   trigger-build:
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Debug - Check gh auth status
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh auth status || echo "gh auth status failed"
+          gh workflow list || echo "gh workflow list failed"
+
       - name: Trigger Build Kernels workflow
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -x
           gh workflow run main.yml \
             --ref main \
             -f release_type=Action \
