@@ -1,0 +1,40 @@
+name: Nightly Build Kernel
+
+on:
+  schedule:
+    - cron: '0 16 * * *'  # Every day at 00:00 Beijing time (UTC+8)
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  trigger-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Build Kernels workflow
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh workflow run main.yml \
+            --ref main \
+            -f release_type=Action \
+            -f use_cache=true \
+            -f bypass=false \
+            -f kernel_build_version=6.6.x-android15 \
+            -f os_patch_level=2026-07 \
+            -f brand_name=8-gc44b714366cc-abogk19650608-4k \
+            -f commit_mode=latest \
+            -f root_flavor=ReSukiSU \
+            -f use_susfs=true \
+            -f use_nomount=true \
+            -f use_bbg=true \
+            -f use_net=true \
+            -f use_ds=false \
+            -f use_ntsync=false \
+            -f use_ptrace=true \
+            -f use_unicode=true \
+            -f use_bpf=true \
+            -f use_perf=true \
+            -f test_release_notes=false
