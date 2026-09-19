@@ -13,39 +13,56 @@ jobs:
   trigger-build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Debug - Check gh auth status
+      - name: Trigger Build Kernels workflow via API
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
         run: |
-          gh auth status || echo "gh auth status failed"
-          gh workflow list || echo "gh workflow list failed"
+          set -euo pipefail
 
-      - name: Trigger Build Kernels workflow
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -x
-          gh workflow run main.yml \
-            --ref main \
-            -f release_type=Action \
-            -f use_cache=true \
-            -f bypass=false \
-            -f kernel_build_version=6.6.x-android15 \
-            -f os_patch_level=2026-07 \
-            -f brand_name=8-gc44b714366cc-abogk19650608-4k \
-            -f commit_mode=latest \
-            -f root_flavor=ReSukiSU \
-            -f use_susfs=true \
-            -f use_nomount=true \
-            -f use_bbg=true \
-            -f use_net=true \
-            -f use_ds=false \
-            -f use_ntsync=false \
-            -f use_ptrace=true \
-            -f use_unicode=true \
-            -f use_bpf=true \
-            -f use_perf=true \
-            -f test_release_notes=false
+          echo "Repository: $REPO"
+          echo "Triggering workflow_dispatch for main.yml..."
+
+          # Use GitHub REST API to trigger workflow_dispatch
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/$REPO/actions/workflows/main.yml/dispatches \
+            -d '{
+              "ref": "main",
+              "inputs": {
+                "release_type": "Action",
+                "use_cache": "true",
+                "bypass": "false",
+                "kernel_build_version": "6.6.x-android15",
+                "os_patch_level": "2026-07",
+                "brand_name": "8-gc44b714366cc-abogk19650608-4k",
+                "commit_mode": "latest",
+                "root_flavor": "ReSukiSU",
+                "use_susfs": "true",
+                "use_nomount": "true",
+                "use_bbg": "true",
+                "use_net": "true",
+                "use_ds": "false",
+                "use_ntsync": "false",
+                "use_ptrace": "true",
+                "use_unicode": "true",
+                "use_bpf": "true",
+                "use_perf": "true",
+                "test_release_notes": "false"
+              }
+            }')
+
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" | sed '$d')
+
+          echo "HTTP Status: $HTTP_CODE"
+          echo "Response: $BODY"
+
+          if [ "$HTTP_CODE" -ne 204 ]; then
+            echo "::error::Failed to trigger workflow. HTTP $HTTP_CODE"
+            exit 1
+          fi
+
+          echo "Workflow triggered successfully!"
