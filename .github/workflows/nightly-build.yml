@@ -1,68 +1,155 @@
 name: Nightly Build Kernel
 
+# 每天定时触发一次内核构建（走 main.yml 的 workflow_dispatch）。
+#
+# ⚠️ 两个关键前提，缺一不可：
+#   1. 本文件必须存在于**默认分支**上，schedule 才会生效。
+#      GitHub 只从默认分支读取 cron，放在特性分支里是不会跑的。
+#   2. 该仓库必须在 GitHub 上（Gitee 不支持 schedule，也不支持
+#      workflow_dispatch，原版在 Gitee 上永远不会被触发）。
+#
+# 说明：cron 用的是 UTC。'0 16 * * *' = 次日 00:00 北京时间。
+
 on:
   schedule:
-    - cron: '0 16 * * *'  # Every day at 00:00 Beijing time (UTC+8)
+    - cron: '0 16 * * *'  # 每天 00:00 北京时间（UTC+8）
   workflow_dispatch:
+    inputs:
+      kernel_build_version:
+        description: "内核版本"
+        type: string
+        default: "6.6.x-android15"
+      root_flavor:
+        description: "Root 方案"
+        type: string
+        default: "ReSukiSU"
+      commit_mode:
+        description: "提交选取模式"
+        type: choice
+        options:
+          - latest
+          - verified
+          - update
+        default: latest
 
+# 触发另一个工作流需要 actions: write，读取自身代码需要 contents: read。
 permissions:
   actions: write
   contents: read
+
+# 避免定时任务与手动触发叠加执行。
+concurrency:
+  group: nightly-build-trigger
+  cancel-in-progress: false
 
 jobs:
   trigger-build:
     runs-on: ubuntu-latest
     steps:
-      - name: Trigger Build Kernels workflow via API
+      - name: Verify workflow exists on default branch
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
 
-          echo "Repository: $REPO"
-          echo "Triggering workflow_dispatch for main.yml..."
-
-          # Use GitHub REST API to trigger workflow_dispatch
-          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+          # 提前确认 main.yml 确实已经推到默认分支且可被 dispatch，
+          # 否则后面调 API 只会得到一个看不懂的 404。
+          CODE=$(curl -s -o /tmp/wf.json -w '%{http_code}' \
             -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
-            https://api.github.com/repos/$REPO/actions/workflows/main.yml/dispatches \
-            -d '{
-              "ref": "main",
-              "inputs": {
-                "release_type": "Action",
-                "use_cache": "true",
-                "bypass": "false",
-                "kernel_build_version": "6.6.x-android15",
-                "os_patch_level": "2026-07",
-                "brand_name": "8-gc44b714366cc-abogk19650608-4k",
-                "commit_mode": "latest",
-                "root_flavor": "ReSukiSU",
-                "use_susfs": "true",
-                "use_nomount": "true",
-                "use_bbg": "true",
-                "use_net": "true",
-                "use_ds": "false",
-                "use_ntsync": "false",
-                "use_ptrace": "true",
-                "use_unicode": "true",
-                "use_bpf": "true",
-                "use_perf": "true",
-                "test_release_notes": "false"
-              }
-            }')
+            "https://api.github.com/repos/${REPO}/actions/workflows/main.yml")
+
+          if [ "$CODE" != "200" ]; then
+            echo "::error::无法读取 main.yml（HTTP ${CODE}）。请确认该工作流已存在于默认分支，且 token 具备 actions 权限。"
+            exit 1
+          fi
+
+          STATE=$(python3 -c "import json;print(json.load(open('/tmp/wf.json')).get('state',''))")
+          echo "main.yml 状态：${STATE}"
+          if [ "$STATE" != "active" ]; then
+            echo "::warning::main.yml 当前状态为 ${STATE}，dispatch 可能不会生效。"
+          fi
+
+      - name: Trigger Build Kernels workflow via API
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          # 手动触发时用输入值，定时触发时用下面这段默认值。
+          IN_KERNEL: ${{ inputs.kernel_build_version }}
+          IN_ROOT: ${{ inputs.root_flavor }}
+          IN_MODE: ${{ inputs.commit_mode }}
+        run: |
+          set -euo pipefail
+
+          # 定时触发时 inputs 为空，这里补默认值。
+          KERNEL_VERSION="${IN_KERNEL:-6.6.x-android15}"
+          ROOT_FLAVOR="${IN_ROOT:-ReSukiSU}"
+          COMMIT_MODE="${IN_MODE:-latest}"
+
+          echo "仓库：${REPO}"
+          echo "内核版本：${KERNEL_VERSION}"
+          echo "Root 方案：${ROOT_FLAVOR}"
+          echo "提交模式：${COMMIT_MODE}"
+
+          # 用 python 组装 payload，避免手写 JSON 时漏逗号或错引号。
+          python3 - "$KERNEL_VERSION" "$ROOT_FLAVOR" "$COMMIT_MODE" <<'PYEOF' > dispatch.json
+          import json, sys
+          kernel_version, root_flavor, commit_mode = sys.argv[1:4]
+          inputs = {
+              "release_type": "Action",
+              "use_cache": "true",
+              "bypass": "false",
+              "kernel_build_version": kernel_version,
+              "os_patch_level": "2026-07",
+              "brand_name": "8-gc44b714366cc-abogk19650608-4k",
+              "commit_mode": commit_mode,
+              "root_flavor": root_flavor,
+              "use_susfs": "true",
+              "use_nomount": "true",
+              "use_bbg": "true",
+              "use_net": "true",
+              "use_ds": "false",
+              "use_ntsync": "false",
+              "use_ptrace": "true",
+              "use_unicode": "true",
+              "use_bpf": "true",
+              "use_perf": "true",
+              "test_release_notes": "false",
+          }
+          json.dump({"ref": "main", "inputs": inputs}, sys.stdout)
+          PYEOF
+
+          echo "请求体：$(cat dispatch.json)"
+
+          RESPONSE=$(curl -s -w '\n%{http_code}' -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${REPO}/actions/workflows/main.yml/dispatches" \
+            --data @dispatch.json)
 
           HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
           BODY=$(echo "$RESPONSE" | sed '$d')
 
-          echo "HTTP Status: $HTTP_CODE"
-          echo "Response: $BODY"
+          echo "HTTP 状态码：${HTTP_CODE}"
+          if [ -n "$BODY" ]; then
+            echo "响应：${BODY}"
+          fi
 
-          if [ "$HTTP_CODE" -ne 204 ]; then
-            echo "::error::Failed to trigger workflow. HTTP $HTTP_CODE"
+          if [ "$HTTP_CODE" != "204" ]; then
+            echo "::error::触发构建失败，HTTP ${HTTP_CODE}"
+            echo "排查提示：404 通常是 main.yml 不在默认分支，或 ref 写错；403 通常是 permissions.actions 权限不足。"
             exit 1
           fi
 
-          echo "Workflow triggered successfully!"
+          echo "构建已触发。"
+          {
+            echo "## Nightly Build 已触发"
+            echo ""
+            echo "- 内核版本：\`${KERNEL_VERSION}\`"
+            echo "- Root 方案：\`${ROOT_FLAVOR}\`"
+            echo "- 提交模式：\`${COMMIT_MODE}\`"
+            echo "- 查看构建：https://github.com/${REPO}/actions/workflows/main.yml"
+          } >> "$GITHUB_STEP_SUMMARY"
