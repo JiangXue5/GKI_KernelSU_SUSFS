@@ -8,11 +8,16 @@ name: Nightly Build Kernel
 #   2. 该仓库必须在 GitHub 上（Gitee 不支持 schedule，也不支持
 #      workflow_dispatch，原版在 Gitee 上永远不会被触发）。
 #
-# 说明：cron 用的是 UTC。'0 16 * * *' = 次日 00:00 北京时间。
+# 说明：cron 用的是 UTC。'17 15 * * *' = 每天 23:17 北京时间（UTC+8）。
+#
+# ⚠️ GitHub 不保证定时任务准点执行，整点（:00）是全站最拥挤的档位，
+#    排队延迟可能从几分钟到一小时以上。这里刻意偏移到 :17 避开高峰，
+#    实际触发时间会比写在 :00 更稳定地贴近 23:17。
+#    想改回严格整点就把 17 换回 0，代价是延迟波动更大。
 
 on:
   schedule:
-    - cron: '0 16 * * *'  # 每天 00:00 北京时间（UTC+8）
+    - cron: '17 15 * * *'  # 每天 23:17 北京时间（UTC+8），刻意避开整点高峰
   workflow_dispatch:
     inputs:
       kernel_build_version:
@@ -112,9 +117,9 @@ jobs:
               "use_net": "true",
               "use_ds": "false",
               "use_ntsync": "false",
-              "use_ptrace": "true",
+              "use_ptrace": "false",
               "use_unicode": "true",
-              "use_bpf": "true",
+              "use_bpf": "false",
               "use_perf": "true",
               "test_release_notes": "false",
           }
@@ -148,8 +153,8 @@ jobs:
           {
             echo "## Nightly Build 已触发"
             echo ""
-            echo "- 内核版本：\`${KERNEL_VERSION}\`"
-            echo "- Root 方案：\`${ROOT_FLAVOR}\`"
-            echo "- 提交模式：\`${COMMIT_MODE}\`"
+            echo "- 内核版本：`${KERNEL_VERSION}`"
+            echo "- Root 方案：`${ROOT_FLAVOR}`"
+            echo "- 提交模式：`${COMMIT_MODE}`"
             echo "- 查看构建：https://github.com/${REPO}/actions/workflows/main.yml"
           } >> "$GITHUB_STEP_SUMMARY"
