@@ -113,7 +113,7 @@ jobs:
               "root_flavor": root_flavor,
               "use_susfs": "true",
               "use_nomount": "true",
-              "use_bbg": "true",
+              "use_bbg": "false",
               "use_net": "true",
               "use_ds": "false",
               "use_ntsync": "false",
