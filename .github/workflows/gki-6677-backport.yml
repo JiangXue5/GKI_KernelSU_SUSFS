@@ -1,8 +1,14 @@
 name: gki-6677-backport
 
 # gki6677 P1 pipeline (plan §6, §7). One job = one full answer:
-#   pinned fetch -> series apply -> build.sh -> version check -> ABI gate
+#   pinned fetch -> series apply -> Kleaf build -> version check -> ABI gate
 #   -> AK3 packaging -> artifacts (+ optional release).
+#
+# Build system note (shot-#1 fix, 2026-10-31): on android15-6.6 the official
+# kernel/manifest ships kernel/build as the Kleaf (Bazel) tree; legacy
+# build/build.sh does NOT exist on this branch (that was run 111717902680's
+# exit-127 failure). Kleaf defaults reproduce the stock uname contract
+# exactly — see the Build step comments for the full proof chain.
 #
 # Triggers:
 #   - push to gki6677 touching the project tree -> automatic pure build
@@ -45,7 +51,6 @@ env:
   # The device daily-drives a build of this exact commit with all 268 stock
   # vendor modules — the baseline choice is empirically pre-proven (plan P0).
   KERNEL_PIN: 8d05d8f2439f6a6659b324db458b27fb2f53bb50
-  OUT_DIR: /home/runner/out
 
 jobs:
   pure:
@@ -92,47 +97,67 @@ jobs:
       - name: Apply patch series (empty series = bit-exact Google tip)
         run: gki6677/scripts/apply-series.sh gki6677/series.conf
 
-      - name: Build GKI (build.sh, build.config.gki.aarch64, 4k, LTO=thin)
+      - name: Build GKI (Kleaf/Bazel — kernel_aarch64, 4k, LTO=thin default)
         working-directory: kernel
         run: |
           set -euo pipefail
-          # Same env contract as the proven Wild build (build-kernel action):
-          # legacy build.sh, kernel-only artifacts, out-of-tree OUT_DIR.
-          sed -i 's/check_defconfig//' ./common/build.config.gki
-          BUILD_GKI_ARTIFACTS="" \
-          BUILD_GKI_CERTIFICATION_TOOLS=0 \
-          BUILD_SYSTEM_DLKM=0 \
-          SKIP_VENDOR_BOOT=1 \
-          SKIP_EXT_MODULES=1 \
-          SKIP_CP_KERNEL_HDR=1 \
-          OUT_DIR="${OUT_DIR}" \
-          LTO=thin \
-          BUILD_CONFIG=common/build.config.gki.aarch64 \
-          build/build.sh -j"$(nproc)"
+          # Kleaf invocation = byte-exact Wild-proven recipe (same manifest,
+          # same runners, this exact device's daily kernel). Why each piece
+          # is exactly what the stock contract needs — all verified against
+          # kernel/build @ a4049bc9debc, the SHA the manifest superproject
+          # pins for common-android15-6.6-2025-03:
+          #   - //common:kernel_aarch64/Image: declared output. Building it
+          #     runs the monolithic kbuild action, which atomically also
+          #     materializes kernel_aarch64_Module.symvers
+          #     (keep_module_symvers=True) and the dependency action output
+          #     kernel_aarch64_config/out_dir/.config.
+          #   - 4k page size: kleaf's default arm64 fragment sets
+          #     CONFIG_LOCALVERSION="-4k" — the stock banner suffix.
+          #   - LTO: gki_defconfig carries CONFIG_LTO_CLANG_THIN=y; kleaf's
+          #     lto=default resolves to thin (Wild log: "lto=default;trim").
+          #   - scmversion: --config=stamp runs setlocalversion over common/'s
+          #     git HEAD; BRANCH=android15-6.6 + KMI_GENERATION=8 from
+          #     build.config.common give the "-android15-8" prefix.
+          #   - Belt-and-suspenders: if stamping is ever lost, the non-stamp
+          #     fallback would emit "-maybe-dirty" into uname; neutralize it.
+          sed -i "/stable_scmversion_cmd/s/-maybe-dirty//g" \
+            build/kernel/kleaf/impl/stamp.bzl
+          tools/bazel build \
+            --config=fast \
+            --config=stamp \
+            --disk_cache=/home/runner/.cache/bazel \
+            //common:kernel_aarch64/Image
 
-      - name: Locate build outputs
+      - name: Locate build outputs (Kleaf bazel-bin layout)
         id: locate
         run: |
           set -euo pipefail
-          IMG="$(find "${OUT_DIR}" -maxdepth 3 -type f -name Image | head -n1 || true)"
-          SYM="$(find "${OUT_DIR}" -maxdepth 4 -type f -name Module.symvers | head -n1 || true)"
-          CFG="$(find "${OUT_DIR}" -maxdepth 3 -type f -name .config | head -n1 || true)"
-          if [ -z "$IMG" ]; then
-            echo "ERROR: kernel Image not found under ${OUT_DIR}" >&2
-            find "${OUT_DIR}" -maxdepth 3 -type f | head -50 >&2 || true
-            exit 1
-          fi
-          if [ -z "$SYM" ]; then
-            echo "ERROR: Module.symvers not found under ${OUT_DIR}" >&2
-            exit 1
-          fi
+          WS="${GITHUB_WORKSPACE:-$PWD}"
+          IMG="${WS}/kernel/bazel-bin/common/kernel_aarch64/Image"
+          SYM="${WS}/kernel/bazel-bin/common/kernel_aarch64/kernel_aarch64_Module.symvers"
+          CFG="${WS}/kernel/bazel-bin/common/kernel_aarch64_config/out_dir/.config"
+          # Hard expectations, not guesses: these are declared outputs of
+          # //common:kernel_aarch64 (Module.symvers copy = keep_module_symvers,
+          # .config = kernel_config dependency action). Missing = build bug.
+          for f in "$IMG" "$SYM"; do
+            if [ ! -s "$f" ]; then
+              echo "ERROR: expected kleaf output missing/empty: ${f}" >&2
+              find "${WS}/kernel/bazel-bin" -maxdepth 4 2>/dev/null | head -50 >&2 || true
+              exit 1
+            fi
+          done
           echo "image=${IMG}"   >> "$GITHUB_OUTPUT"
           echo "symvers=${SYM}" >> "$GITHUB_OUTPUT"
           echo "config=${CFG}"  >> "$GITHUB_OUTPUT"
           echo "Image: ${IMG} ($(stat -c%s "$IMG") bytes)"
           echo "Module.symvers: ${SYM} ($(stat -c%s "$SYM") bytes)"
+          if [ -s "$CFG" ]; then
+            echo ".config: ${CFG} ($(stat -c%s "$CFG") bytes)"
+          else
+            echo "WARNING: .config not found (non-fatal)"
+          fi
 
-      - name: Verify uname -r contract (§10.2 check #1, pre-flash)
+      - name: "Verify uname -r contract (§10.2 check #1, pre-flash)"
         run: |
           set -euo pipefail
           V="$(strings "${{ steps.locate.outputs.image }}" | grep -m1 '^Linux version' || true)"
@@ -141,9 +166,21 @@ jobs:
             echo "ERROR: version string violates the 6.6.77-android15-8-g<hash> contract" >&2
             exit 1
           fi
-          echo "version contract satisfied: SUBLEVEL=77, KMI generation 8, git suffix present"
+          # The -g<hash> must equal kernel/common's git HEAD: for the empty
+          # series that is the pinned Google tip itself; for patched series
+          # it is the series commit apply-series.sh created (and because
+          # --config=stamp + the stamp.bzl guard suppress it, no -dirty noise
+          # can leak into the banner even though the tree carries edits).
+          EXPECTED="$(git -C kernel/common rev-parse --short=12 HEAD)"
+          BANNER_HASH="$(echo "$V" | sed -n 's/.*-g\([0-9a-f]\{12\}\).*/\1/p')"
+          echo "expected scmversion hash: ${EXPECTED} (kernel/common HEAD)"
+          if [ "${BANNER_HASH}" != "${EXPECTED}" ]; then
+            echo "ERROR: banner hash ${BANNER_HASH:-<none>} != kernel/common HEAD ${EXPECTED}" >&2
+            exit 1
+          fi
+          echo "version contract satisfied: SUBLEVEL=77, KMI generation 8, scmversion = kernel/common HEAD"
 
-      - name: ABI gate (zero-delta vs baseline; capture mode for shot #1)
+      - name: "ABI gate (zero-delta vs baseline; capture mode for shot #1)"
         run: |
           set -euo pipefail
           BASE="gki6677/abi-baseline/Module.symvers.baseline"
@@ -153,7 +190,10 @@ jobs:
           else
             echo "no baseline yet — G1 CAPTURE mode: this build's Module.symvers becomes the project baseline"
             gki6677/scripts/abi-gate.sh capture "${{ steps.locate.outputs.symvers }}" abi-out
-            cp "${{ steps.locate.outputs.config }}" abi-out/.config-6677 2>/dev/null || true
+            # non-hidden name: upload-artifact skips dotfiles by default
+            if [ -s "${{ steps.locate.outputs.config }}" ]; then
+              cp "${{ steps.locate.outputs.config }}" abi-out/config-6677.txt
+            fi
           fi
 
       - name: Package AnyKernel3
