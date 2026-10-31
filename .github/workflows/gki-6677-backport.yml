@@ -115,14 +115,24 @@ jobs:
           #     CONFIG_LOCALVERSION="-4k" — the stock banner suffix.
           #   - LTO: gki_defconfig carries CONFIG_LTO_CLANG_THIN=y; kleaf's
           #     lto=default resolves to thin (Wild log: "lto=default;trim").
-          #   - scmversion: --config=stamp runs setlocalversion over common/'s
-          #     git HEAD; BRANCH=android15-6.6 + KMI_GENERATION=8 from
-          #     build.config.common give the "-android15-8" prefix.
+          #   - scmversion (run-2 fix, 111725723452): --config=stamp embeds it,
+          #     but kleaf must first DISCOVER Git projects — via a repo/.repo
+          #     root or --extra_git_project only (kleaf/docs/scmversion.md:
+          #     "If your workspace is not controlled with repo, use
+          #     --extra_git_project"). Our workspace is bare git clones, so
+          #     round 2 warned "Can't determine STABLE_SCMVERSIONS for common"
+          #     and shipped the -g-less banner 6.6.77-android15-8-4k. The flag
+          #     feeds workspace_status_stamp.py the project list; with the
+          #     default --kleaf_localversion it then stamps -g<12-char common
+          #     HEAD> (= 8d05d8f2439f for the empty series; apply-series.sh
+          #     guarantees a clean tree either way, so no -dirty) and derives
+          #     a real SOURCE_DATE_EPOCH from the commit date instead of 0.
           #   - Belt-and-suspenders: if stamping is ever lost, the non-stamp
           #     fallback would emit "-maybe-dirty" into uname; neutralize it.
           sed -i "/stable_scmversion_cmd/s/-maybe-dirty//g" \
             build/kernel/kleaf/impl/stamp.bzl
           tools/bazel build \
+            --extra_git_project common \
             --config=fast \
             --config=stamp \
             --disk_cache=/home/runner/.cache/bazel \
