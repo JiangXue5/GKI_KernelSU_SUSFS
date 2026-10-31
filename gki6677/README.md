@@ -24,20 +24,27 @@ pre-proven, not theoretical.
 ```
 gki6677/
 ├── README.md                      # this file
-├── series.conf                    # ordered quilt series (lands with the first batch)
-├── config-fragment-6677.conf      # delta vs gki_defconfig (normally near-empty)
+├── series.conf                    # ordered quilt series (empty seed: pure = pinned tip)
+├── config-fragment-6677.conf      # delta vs gki_defconfig (added when a delta is first needed)
 ├── patches/                       # 0001-*.patch, 0002-*.patch … (first batch: P3)
 ├── abi-baseline/
 │   └── Module.symvers.baseline    # captured at G1 from an unpatched build of the pin
 ├── docs/
 │   └── device-inventory.md        # P0/G0 evidence
 └── scripts/                       # fetch-googlesource.sh, apply-series.sh,
-                                   # abi-gate.sh, build-ak3.sh (P1 delivery)
+                                   # abi-gate.sh, build-ak3.sh (landed, P1)
 ```
 
-`../.github/workflows/gki-6677-backport.yml` plus the four scripts arrive as
-the next batch (P1). The WildKernels engine elsewhere in this repo stays
-untouched and keeps serving the KernelSU/SUSFS flavor (plan §2, P6).
+`../.github/workflows/gki-6677-backport.yml` and the four scripts are live
+(P1). CI triggers: **push** to this branch touching the series/scripts
+(primary — the workflow_dispatch UI only lists default-branch workflows, and
+the WildKernels engine on `main-chandr1000` stays untouched), or
+**workflow_dispatch** with an optional `release_tag` once the file also
+lands on the default branch. Shot #1 (G1) runs in ABI **capture mode** and
+its artifact `Module.symvers.baseline` must be committed to `abi-baseline/`
+before any patch batch is gated. The WildKernels engine elsewhere in this
+repo stays untouched and keeps serving the KernelSU/SUSFS flavor (plan §2,
+P6).
 
 ## Rules every patch obeys (plan §5, short form)
 
