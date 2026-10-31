@@ -97,6 +97,65 @@ jobs:
       - name: Apply patch series (empty series = bit-exact Google tip)
         run: gki6677/scripts/apply-series.sh gki6677/series.conf
 
+      - name: Remove GKI protected-exports gate (DLKM compat — round-3 device lesson)
+        working-directory: kernel
+        run: |
+          set -euo pipefail
+          # Shot-#1 round-3 device lesson (2026-11-01, plan §10.2.0.2): the
+          # round-3 Image boots to framework, but every stock system_dlkm GKI
+          # module that EXPORTS a symbol on the protected-exports list is
+          # rejected at load time:
+          #     <mod>: exports protected symbol <sym>   -> -EACCES
+          # (rfkill_alloc, arc4_crypt, slhc_compress, generic_mii_ioctl,
+          #  can_*, tipc_*, lowpan_*, wpan_*, pps_event, usb_serial_* ...).
+          # rfkill.ko is among the rejected, so cfg80211/btpower then die
+          # with "Unknown symbol rfkill_*" -> black screen, adbd alive.
+          # Root cause: on android15-6.6 the gate is wired via the Kleaf
+          # kernel_build attribute in common/BUILD.bazel
+          #   "protected_exports_list": "android/abi_gki_protected_exports_aarch64"
+          # — NOT via Kconfig, so it is invisible to defconfig diffs. The
+          # stock kernel (Xiaomi build point g4a507830d890, the system_dlkm
+          # dir name on-device) ships without the gate; Wild's CI removes it
+          # step-for-step (.github/actions/remove-protected-exports). The
+          # check is load-time only: Module.symvers / symbol CRCs are
+          # untouched, so the ABI gate downstream is unaffected.
+          rm -rf common/android/abi_gki_protected_exports_*
+          if ls -1 common/android/abi_gki_protected_exports_* >/dev/null 2>&1; then
+            echo "ERROR: abi_gki_protected_exports_* still exists after removal" >&2
+            exit 1
+          fi
+          if grep -q '"protected_exports_list"[[:space:]]*:[[:space:]]*"android/abi_gki_protected_exports_aarch64"' common/BUILD.bazel; then
+            BEFORE="$(sha256sum common/BUILD.bazel | awk '{print $1}')"
+            perl -pi -e 's/^\s*"protected_exports_list"\s*:\s*"android\/abi_gki_protected_exports_aarch64",\s*$//;' common/BUILD.bazel
+            AFTER="$(sha256sum common/BUILD.bazel | awk '{print $1}')"
+            if [ "$BEFORE" = "$AFTER" ]; then
+              echo "ERROR: common/BUILD.bazel was not modified" >&2
+              exit 1
+            fi
+            if grep -q '"protected_exports_list"[[:space:]]*:[[:space:]]*"android/abi_gki_protected_exports_aarch64"' common/BUILD.bazel; then
+              echo "ERROR: protected_exports_list reference still present in common/BUILD.bazel" >&2
+              exit 1
+            fi
+            echo "protected_exports_list stripped from common/BUILD.bazel"
+          fi
+          # Other branches carry a top-level list in modules.bzl; absent here,
+          # but keep the same fail-loud neutralization for robustness.
+          if grep -q '^protected_modules = ' common/modules.bzl; then
+            BEFORE="$(sha256sum common/modules.bzl | awk '{print $1}')"
+            sed -i 's/^protected_modules = \[.*\]$/protected_modules = []/' common/modules.bzl
+            AFTER="$(sha256sum common/modules.bzl | awk '{print $1}')"
+            if [ "$BEFORE" = "$AFTER" ]; then
+              echo "ERROR: common/modules.bzl was not modified" >&2
+              exit 1
+            fi
+            grep -q '^protected_modules = \[\]' common/modules.bzl || {
+              echo "ERROR: protected_modules not emptied in common/modules.bzl" >&2
+              exit 1
+            }
+            echo "protected_modules emptied in common/modules.bzl"
+          fi
+          echo "protected-exports gate removed; system_dlkm modules can load again"
+
       - name: Build GKI (Kleaf/Bazel — kernel_aarch64, 4k, LTO=thin default)
         working-directory: kernel
         run: |
