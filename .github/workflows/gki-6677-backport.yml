@@ -51,6 +51,11 @@ env:
   # The device daily-drives a build of this exact commit with all 268 stock
   # vendor modules — the baseline choice is empirically pre-proven (plan P0).
   KERNEL_PIN: 8d05d8f2439f6a6659b324db458b27fb2f53bb50
+  # Frozen ABI baseline (G1 closed 2026-11-01): the release whose
+  # Module.symvers.baseline asset the ABI gate enforces against. Bump ONLY
+  # when a new baseline release is deliberately cut (e.g. a future KMI
+  # generation rebump — plan §7); never as a workaround for a gate FAIL.
+  ABI_BASELINE_RELEASE: v0.77-baseline
 
 jobs:
   pure:
@@ -249,21 +254,46 @@ jobs:
           fi
           echo "version contract satisfied: SUBLEVEL=77, KMI generation 8, scmversion = kernel/common HEAD"
 
-      - name: "ABI gate (zero-delta vs baseline; capture mode for shot #1)"
+      - name: "ABI gate (ENFORCE — zero delta vs the frozen release baseline)"
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          BASE="gki6677/abi-baseline/Module.symvers.baseline"
+          # P2+ (2026-11-01): G1 is closed and the frozen baseline is the
+          # Module.symvers.baseline asset of release $ABI_BASELINE_RELEASE,
+          # so the gate no longer captures — it ENFORCES. Baseline
+          # resolution order:
+          #   1. gki6677/abi-baseline/Module.symvers.baseline in the repo
+          #      (offline fast path / pin-refresh escape hatch),
+          #   2. the release asset (primary source from here on — immutable,
+          #      versioned, travels with the G1 evidence release).
+          # NO silent capture fallback: an unresolvable baseline FAILS the
+          # job — capturing here would silently bless KMI-breaking patches.
+          # Manual capture stays possible for a future KMI rebump
+          # (abi-gate.sh capture; plan §7, §10.2.0.1 repeat of shot #1).
           mkdir -p abi-out
+          BASE="gki6677/abi-baseline/Module.symvers.baseline"
           if [ -f "$BASE" ]; then
-            gki6677/scripts/abi-gate.sh check "$BASE" "${{ steps.locate.outputs.symvers }}" abi-out/abi-delta.txt
+            echo "baseline source: in-repo ${BASE}"
           else
-            echo "no baseline yet — G1 CAPTURE mode: this build's Module.symvers becomes the project baseline"
-            gki6677/scripts/abi-gate.sh capture "${{ steps.locate.outputs.symvers }}" abi-out
-            # non-hidden name: upload-artifact skips dotfiles by default
-            if [ -s "${{ steps.locate.outputs.config }}" ]; then
-              cp "${{ steps.locate.outputs.config }}" abi-out/config-6677.txt
+            echo "baseline source: release ${ABI_BASELINE_RELEASE} (gh release download)"
+            if ! gh release download "$ABI_BASELINE_RELEASE" -R "$GITHUB_REPOSITORY" \
+                 -p 'Module.symvers.baseline' -D abi-out --clobber; then
+              echo "ERROR: Module.symvers.baseline asset not found on release ${ABI_BASELINE_RELEASE} — gate cannot run in enforce mode" >&2
+              echo "assets actually on the release:" >&2
+              gh release view "$ABI_BASELINE_RELEASE" -R "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' >&2 || true
+              exit 1
             fi
+            BASE="abi-out/Module.symvers.baseline"
+            echo "fetched baseline ($(stat -c%s "$BASE") bytes):"
+            sha256sum "$BASE"
           fi
+          # .config evidence on every run (was capture-only before P2)
+          if [ -s "${{ steps.locate.outputs.config }}" ]; then
+            cp "${{ steps.locate.outputs.config }}" abi-out/config-6677.txt
+          fi
+          gki6677/scripts/abi-gate.sh check "$BASE" "${{ steps.locate.outputs.symvers }}" abi-out/abi-delta.txt
+          echo "ABI gate PASS — zero delta vs ${BASE}"
 
       - name: Package AnyKernel3
         run: |

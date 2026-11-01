@@ -48,7 +48,7 @@ case "$MODE" in
     N="$(norm "$CURRENT" | wc -l)"
     log "BASELINE CAPTURED: ${OUTDIR}/Module.symvers.baseline (${N} symbols, $(stat -c%s "${OUTDIR}/Module.symvers.baseline") bytes)"
     sha256sum "${OUTDIR}/Module.symvers.baseline"
-    echo "NOTE: this file is G1 evidence — it must be committed to gki6677/abi-baseline/ (via the follow-up mbox) before any patch batch is gated." >&2
+    echo "NOTE: capture is now the MANUAL path only (future KMI rebump, plan §7) — the standing gate enforces against the frozen release baseline (workflow env ABI_BASELINE_RELEASE, default v0.77-baseline). Commit this file to gki6677/abi-baseline/ only if you prefer the offline in-repo path." >&2
     exit 0
     ;;
 
