@@ -1,0 +1,168 @@
+From: Vincent Donnefort <vdonnefort@google.com>
+Date: Thu May 28 11:07:00 2026 +0100
+Subject: [PATCH] ANDROID: KVM: arm64: Use a single memcache for pKVM heap alloc
+
+Having a per-CPU memcache is problematic. First, if a thread is topping
+up the allocator and is migrated before retrying the HVC, the previous
+topup would be unusable. Second, the refill is done lockless, while the
+reclaim path can access cross-CPU memcache, leading to potential races.
+
+Instead of simply fixing the lock locking for per-CPU memcaches, use a
+single common memcache.
+
+Bug: 508703395
+Bug: 466358412
+Change-Id: I6b49c50bb5b8f2229c48b655234e18354b4637e8
+Signed-off-by: Vincent Donnefort <vdonnefort@google.com>
+(cherry picked from commit c88e7ccf4c356da6ad30ee12d392d3d14b5ebde4)
+
+[gki6677 reshape note — 2026-11-01, Z.ai]
+Reshaped for the 6.6.77 pin (deprecated/android15-6.6-2025-03 @ 8d05d8f2439f):
+- One hunk re-anchored: hyp_alloc_refill(). The pin still refills under
+  hyp_spin_lock (the source branch had already made the per-CPU refill
+  lockless before this fix); the reshaped hunk keeps the pin's locking and
+  points refill_memcache() at the new single allocator->mc — byte-identical
+  to the source branch's post-patch body. All other hunks apply verbatim.
+- init_hyp_memcache() already exists on the pin (asm/kvm_host.h), so the
+  hyp_alloc_init() hunk is unchanged. struct hyp_allocator is file-static in
+  alloc.c — no KMI-visible layout change.
+Verified: git apply --check + apply on the pin tree; hyp_alloc_refill body
+compared byte-for-byte against the upstream source branch.
+
+Origin: android.googlesource.com/kernel/common 8f68185b8289dbe43e96f3d2b036c81c83cc58aa
+CVE: CVE-2026-58848 (Android security bulletin 2026-09, kernel component table)
+
+---
+diff --git a/arch/arm64/kvm/hyp/nvhe/alloc.c b/arch/arm64/kvm/hyp/nvhe/alloc.c
+index dc1a737..56b891e 100644
+--- a/arch/arm64/kvm/hyp/nvhe/alloc.c
++++ b/arch/arm64/kvm/hyp/nvhe/alloc.c
+@@ -18,10 +18,10 @@
+ #define MIN_ALLOC 8UL
+ 
+ static DEFINE_PER_CPU(int, hyp_allocator_errno);
+-static DEFINE_PER_CPU(struct kvm_hyp_memcache, hyp_allocator_mc);
+ static DEFINE_PER_CPU(u8, hyp_allocator_missing_donations);
+ 
+ static struct hyp_allocator {
++	struct kvm_hyp_memcache	mc;
+ 	struct list_head	chunks;
+ 	unsigned long		start;
+ 	u32			size;
+@@ -149,7 +149,7 @@ static inline void chunk_list_del(struct chunk_hdr *chunk,
+ static void hyp_allocator_unmap(struct hyp_allocator *allocator,
+ 				unsigned long va, size_t size)
+ {
+-	struct kvm_hyp_memcache *mc = this_cpu_ptr(&hyp_allocator_mc);
++	struct kvm_hyp_memcache *mc = &allocator->mc;
+ 	int nr_pages = size >> PAGE_SHIFT;
+ 	unsigned long __va = va;
+ 
+@@ -170,7 +170,7 @@ static void hyp_allocator_unmap(struct hyp_allocator *allocator,
+ static int hyp_allocator_map(struct hyp_allocator *allocator,
+ 			     unsigned long va, size_t size)
+ {
+-	struct kvm_hyp_memcache *mc = this_cpu_ptr(&hyp_allocator_mc);
++	struct kvm_hyp_memcache *mc = &allocator->mc;
+ 	unsigned long va_end = va + size;
+ 	int ret, nr_pages = 0;
+ 
+@@ -714,7 +714,6 @@ int hyp_alloc_reclaimable(void)
+ 	struct hyp_allocator *allocator = &hyp_allocator;
+ 	struct chunk_hdr *chunk;
+ 	int reclaimable = 0;
+-	int cpu;
+ 
+ 	hyp_spin_lock(&allocator->lock);
+ 
+@@ -726,11 +725,7 @@ int hyp_alloc_reclaimable(void)
+ 	list_for_each_entry(chunk, &allocator->chunks, node)
+ 		reclaimable += chunk_reclaimable(chunk, allocator) >> PAGE_SHIFT;
+ 
+-	for (cpu = 0; cpu < hyp_nr_cpus; cpu++) {
+-		struct kvm_hyp_memcache *mc = per_cpu_ptr(&hyp_allocator_mc, cpu);
+-
+-		reclaimable += mc->nr_pages;
+-	}
++	reclaimable += allocator->mc.nr_pages;
+ 
+ 	hyp_spin_unlock(&allocator->lock);
+ 
+@@ -740,31 +735,25 @@ int hyp_alloc_reclaimable(void)
+ void hyp_alloc_reclaim(struct kvm_hyp_memcache *mc, int target)
+ {
+ 	struct hyp_allocator *allocator = &hyp_allocator;
+-	struct kvm_hyp_memcache *alloc_mc;
+ 	struct chunk_hdr *chunk, *tmp;
+-	int cpu;
+ 
+ 	if (target <= 0)
+ 		return;
+ 
+ 	hyp_spin_lock(&allocator->lock);
+ 
+-	/* Start emptying potential unused memcache */
+-	for (cpu = 0; cpu < hyp_nr_cpus; cpu++) {
+-		alloc_mc = per_cpu_ptr(&hyp_allocator_mc, cpu);
+-
+-		while (alloc_mc->nr_pages) {
+-			unsigned long order;
+-			void *page = pop_hyp_memcache(alloc_mc, hyp_phys_to_virt, &order);
++	/* Start emptying the common memcache */
++	while (allocator->mc.nr_pages) {
++		unsigned long order;
++		void *page = pop_hyp_memcache(&allocator->mc, hyp_phys_to_virt, &order);
+ 
+-			WARN_ON(order);
+-			push_hyp_memcache(mc, page, hyp_virt_to_phys, 0);
+-			WARN_ON(__pkvm_hyp_donate_host(hyp_virt_to_pfn(page), 1));
++		WARN_ON(order);
++		push_hyp_memcache(mc, page, hyp_virt_to_phys, 0);
++		WARN_ON(__pkvm_hyp_donate_host(hyp_virt_to_pfn(page), 1));
+ 
+-			target--;
+-			if (target <= 0)
+-				goto done;
+-		}
++		target--;
++		if (target <= 0)
++			goto done;
+ 	}
+ 
+ 	list_for_each_entry_safe_reverse(chunk, tmp, &allocator->chunks, node) {
+@@ -780,10 +769,9 @@ void hyp_alloc_reclaim(struct kvm_hyp_memcache *mc, int target)
+ 			break;
+ 	}
+ 
+-	alloc_mc = this_cpu_ptr(&hyp_allocator_mc);
+-	while (alloc_mc->nr_pages) {
++	while (allocator->mc.nr_pages) {
+ 		unsigned long order;
+-		void *page = pop_hyp_memcache(alloc_mc, hyp_phys_to_virt, &order);
++		void *page = pop_hyp_memcache(&allocator->mc, hyp_phys_to_virt, &order);
+ 
+ 		WARN_ON(order);
+ 		memset(page, 0, PAGE_SIZE);
+@@ -797,12 +785,11 @@ done:
+ 
+ int hyp_alloc_refill(struct kvm_hyp_memcache *host_mc)
+ {
+-	struct kvm_hyp_memcache *alloc_mc = this_cpu_ptr(&hyp_allocator_mc);
+-	int ret;
+ 	struct hyp_allocator *allocator = &hyp_allocator;
++	int ret;
+ 
+ 	hyp_spin_lock(&allocator->lock);
+-	ret = refill_memcache(alloc_mc, host_mc->nr_pages + alloc_mc->nr_pages,
++	ret = refill_memcache(&allocator->mc, host_mc->nr_pages + allocator->mc.nr_pages,
+ 			      host_mc);
+ 	hyp_spin_unlock(&allocator->lock);
+ 
+@@ -827,6 +814,7 @@ int hyp_alloc_init(size_t size)
+ 	allocator->size = size;
+ 	INIT_LIST_HEAD(&allocator->chunks);
+ 	hyp_spin_lock_init(&allocator->lock);
++	init_hyp_memcache(&allocator->mc);
+ 
+ 	return 0;
+ }
