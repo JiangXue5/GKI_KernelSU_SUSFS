@@ -1,0 +1,33 @@
+From: Daeho Jeong <daehojeong@google.com>
+Date: Fri Jun 6 11:49:04 2025 -0700
+Subject: [PATCH] UPSTREAM: f2fs: turn off one_time when forcibly set to foreground GC
+
+one_time mode is only for background GC. So, we need to set it back to
+false when foreground GC is enforced.
+
+Fixes: 9748c2ddea4a ("f2fs: do FG_GC when GC boosting is required for zoned devices")
+Signed-off-by: Daeho Jeong <daehojeong@google.com>
+Reviewed-by: Chao Yu <chao@kernel.org>
+Signed-off-by: Jaegeuk Kim <jaegeuk@kernel.org>
+
+Bug: 325517257
+(cherry picked from commit 8142daf8a53806689186ee255cc02f89af7f8890)
+Change-Id: I24bae7bd907e0c2f2fba6fe880fa565e6354fd08
+Signed-off-by: Daeho Jeong <daehojeong@google.com>
+
+Origin: android.googlesource.com/kernel/common 71bd6942e33f9711a4cfc196a36102cbcef19ca8
+Batch: B-1 (P4 stability & functional backports) - Class A, apply as-is; predicted ABI delta zero
+
+---
+diff --git a/fs/f2fs/gc.c b/fs/f2fs/gc.c
+index eafb4ba335..b2cfc961ef 100644
+--- a/fs/f2fs/gc.c
++++ b/fs/f2fs/gc.c
+@@ -1910,6 +1910,7 @@ gc_more:
+ 	/* Let's run FG_GC, if we don't have enough space. */
+ 	if (has_not_enough_free_secs(sbi, 0, 0)) {
+ 		gc_type = FG_GC;
++		gc_control->one_time = false;
+ 
+ 		/*
+ 		 * For example, if there are many prefree_segments below given
