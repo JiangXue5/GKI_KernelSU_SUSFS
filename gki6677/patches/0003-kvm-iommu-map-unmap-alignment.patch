@@ -1,0 +1,56 @@
+From: Mostafa Saleh <smostafa@google.com>
+Date: Wed May 27 09:55:57 2026 +0000
+Subject: [PATCH] ANDROID: KVM: arm64: iommu: Harden map/unmap checks
+
+Make sure that the IOVA and paddr requested are aligned to the page
+size.
+
+Bug: 508703583
+Change-Id: I1bb170cce84127e544d09df3067a39332aadac65
+Signed-off-by: Mostafa Saleh <smostafa@google.com>
+
+[gki6677 reshape note — 2026-11-01, Z.ai]
+Reshaped for the 6.6.77 pin (deprecated/android15-6.6-2025-03 @ 8d05d8f2439f):
+- Both hunks re-anchored: the pin tree predates the per-API idmap-domain
+  guards (ddb4101bc0ab), so the "if (domain_id == KVM_IOMMU_DOMAIN_IDMAP_ID)"
+  context lines of the original hunks do not exist here. The guards are
+  inserted at the same logical position (after the overflow check, before
+  handle_to_domain()).
+- Error codes adapted to the pin contract: kvm_iommu_map_pages() on the pin
+  returns 0 on every error path (callers read it as size_t mapped-count), so
+  the misalignment guard returns 0 — the source branch's "return -EINVAL"
+  would be read back as a huge mapped count. Semantics of the fix unchanged:
+  misaligned IOVA/paddr never reach kvm_iommu_ops->{map,unmap}_pages.
+- The vulnerable kvm_iommu_map_sg() path of the sibling fix CVE-2026-58846
+  does not exist on the pin (divergence list D5).
+Verified: git apply --check + apply on the pin tree; patched map_pages /
+unmap_pages bodies compared against the upstream source branch.
+
+Origin: android.googlesource.com/kernel/common 6bc773e9c9f8ec6c5c431934462badbbb7d21767
+CVE: CVE-2026-58941 (Android security bulletin 2026-09, kernel component table)
+
+---
+diff --git a/arch/arm64/kvm/hyp/nvhe/iommu/iommu.c b/arch/arm64/kvm/hyp/nvhe/iommu/iommu.c
+index 90a8246..978e86c 100644
+--- a/arch/arm64/kvm/hyp/nvhe/iommu/iommu.c
++++ b/arch/arm64/kvm/hyp/nvhe/iommu/iommu.c
+@@ -497,6 +497,9 @@ size_t kvm_iommu_map_pages(pkvm_handle_t domain_id, unsigned long iova,
+ 	    iova + size < iova || paddr + size < paddr)
+ 		return 0;
+ 
++	if (!IS_ALIGNED(iova | paddr, pgsize))
++		return 0;
++
+ 	domain = handle_to_domain(domain_id);
+ 	if (!domain || domain_get(domain))
+ 		return 0;
+@@ -593,6 +596,9 @@ size_t kvm_iommu_unmap_pages(pkvm_handle_t domain_id,
+ 	    iova + size < iova)
+ 		return 0;
+ 
++	if (!IS_ALIGNED(iova, pgsize))
++		return 0;
++
+ 	domain = handle_to_domain(domain_id);
+ 	if (!domain || domain_get(domain))
+ 		return 0;
