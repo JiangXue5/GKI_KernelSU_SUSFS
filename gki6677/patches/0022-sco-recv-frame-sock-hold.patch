@@ -1,0 +1,57 @@
+From: Hyunwoo Kim <imv4bel@gmail.com>
+Date: Fri Mar 13 05:26:16 2026 +0900
+Subject: [PATCH] Bluetooth: SCO: Fix use-after-free in sco_recv_frame() due to missing sock_hold
+
+[ Upstream commit 598dbba9919c5e36c54fe1709b557d64120cb94b ]
+
+sco_recv_frame() reads conn->sk under sco_conn_lock() but immediately
+releases the lock without holding a reference to the socket. A concurrent
+close() can free the socket between the lock release and the subsequent
+sk->sk_state access, resulting in a use-after-free.
+
+Other functions in the same file (sco_sock_timeout(), sco_conn_del())
+correctly use sco_sock_hold() to safely hold a reference under the lock.
+
+Fix by using sco_sock_hold() to take a reference before releasing the
+lock, and adding sock_put() on all exit paths.
+
+Fixes: 1da177e4c3f4 ("Linux-2.6.12-rc2")
+Signed-off-by: Hyunwoo Kim <imv4bel@gmail.com>
+Signed-off-by: Luiz Augusto von Dentz <luiz.von.dentz@intel.com>
+Signed-off-by: Sasha Levin <sashal@kernel.org>
+
+Origin: android.googlesource.com/kernel/common 45aaca995e4a7a05b272a58e7ab2fff4f611b8f1
+Batch: B-1 (P4 stability & functional backports) - Class A, apply as-is; predicted ABI delta zero
+
+---
+diff --git a/net/bluetooth/sco.c b/net/bluetooth/sco.c
+index 6635d155e3..56a146515d 100644
+--- a/net/bluetooth/sco.c
++++ b/net/bluetooth/sco.c
+@@ -338,7 +338,7 @@ static void sco_recv_frame(struct sco_conn *conn, struct sk_buff *skb)
+ 	struct sock *sk;
+ 
+ 	sco_conn_lock(conn);
+-	sk = conn->sk;
++	sk = sco_sock_hold(conn);
+ 	sco_conn_unlock(conn);
+ 
+ 	if (!sk)
+@@ -347,11 +347,15 @@ static void sco_recv_frame(struct sco_conn *conn, struct sk_buff *skb)
+ 	BT_DBG("sk %p len %u", sk, skb->len);
+ 
+ 	if (sk->sk_state != BT_CONNECTED)
+-		goto drop;
++		goto drop_put;
+ 
+-	if (!sock_queue_rcv_skb(sk, skb))
++	if (!sock_queue_rcv_skb(sk, skb)) {
++		sock_put(sk);
+ 		return;
++	}
+ 
++drop_put:
++	sock_put(sk);
+ drop:
+ 	kfree_skb(skb);
+ }
