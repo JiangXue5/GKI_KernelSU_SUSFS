@@ -1,0 +1,61 @@
+From: Sonali Pradhan <sonalipradhan@google.com>
+Date: Tue Jul 28 20:24:32 2026 +0000
+Subject: [PATCH] UPSTREAM: ALSA: usb-audio: Clamp frame size in implicit-feedback mode
+
+commit 8d7a30c50c2e58a6839634ed0acde14466d1dc61 upstream.
+
+snd_usb_handle_sync_urb() scales received sync packet sizes by the sender's
+stride and stores the result directly in out_packet->packet_size[i]. If a
+connected USB device sends an oversized sync packet, this frame count can
+exceed ep->maxframesize.
+
+The un-clamped frame count then propagates to the playback endpoint queue,
+potentially driving packet transfers beyond the endpoint's hardware frame
+limits.
+
+Cap the calculated frame count against ep->maxframesize in
+snd_usb_handle_sync_urb() to prevent oversized packets from entering the
+playback queue.
+
+Fixes: 28acb12014fb ("ALSA: usb-audio: use sender stride for implicit feedback")
+Cc: stable@vger.kernel.org
+Assisted-by: Jetski:Gemini-3.6-Flash
+Signed-off-by: Sonali Pradhan <sonalipradhan@google.com>
+Link: https://patch.msgid.link/20260728202432.2354994-1-sonalipradhan@google.com
+Signed-off-by: Takashi Iwai <tiwai@suse.de>
+Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+Bug: 496307231
+(cherry picked from commit 56ac3e7c90f6b45969c3fd07a98fad760ffd6901
+ https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git
+ linux-6.6.y)
+Change-Id: I3c5eec2715d31bc724e1fe84e654bc870c0099cb
+Signed-off-by: Sonali Pradhan <sonalipradhan@google.com>
+(cherry picked from commit 60cf931c5a95dacbbd86483d5d0978e80a756ccd)
+Signed-off-by: Sonali Pradhan <sonalipradhan@google.com>
+
+Origin: android.googlesource.com/kernel/common bf768be0eed008588dc4e0db0b2f76c026a35818
+Batch: B-1 (P4 stability & functional backports) - Class A, apply as-is; predicted ABI delta zero
+
+---
+diff --git a/sound/usb/endpoint.c b/sound/usb/endpoint.c
+index fd37acbdc1..4c7212300c 100644
+--- a/sound/usb/endpoint.c
++++ b/sound/usb/endpoint.c
+@@ -1835,11 +1835,13 @@ static void snd_usb_handle_sync_urb(struct snd_usb_endpoint *ep,
+ 
+ 		out_packet->packets = in_ctx->packets;
+ 		for (i = 0; i < in_ctx->packets; i++) {
+-			if (urb->iso_frame_desc[i].status == 0)
+-				out_packet->packet_size[i] =
++			if (urb->iso_frame_desc[i].status == 0) {
++				unsigned int frames =
+ 					urb->iso_frame_desc[i].actual_length / sender->stride;
+-			else
++				out_packet->packet_size[i] = min(frames, ep->maxframesize);
++			} else {
+ 				out_packet->packet_size[i] = 0;
++			}
+ 		}
+ 
+ 		spin_unlock_irqrestore(&ep->lock, flags);
