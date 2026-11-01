@@ -1,0 +1,36 @@
+From: Lee Jones <lee@kernel.org>
+Date: Wed Apr 29 13:40:41 2026 +0000
+Subject: [PATCH] FROMGIT: nfc: llcp: Fix use-after-free in llcp_sock_release()
+
+llcp_sock_release() unconditionally unlinks the socket from the local
+sockets list.  However, if the socket is still in connecting state, it
+is on the connecting list.
+
+Fix this by checking the socket state and unlinking from the correct list.
+
+Bug: 500030631
+Fixes: b4011239a08e ("NFC: llcp: Fix non blocking sockets connections")
+Signed-off-by: Lee Jones <lee@kernel.org>
+Link: https://patch.msgid.link/20260429134115.3558604-1-lee@kernel.org
+Signed-off-by: David Heidelberg <david@ixit.cz>
+(cherry picked from commit 092b1746a0beaf51ca1af94c2c1a436d22e3e182) # linux-nfc
+Signed-off-by: Lee Jones <joneslee@google.com>
+Change-Id: If28a08d1698b63a29a08f4024378c8aeea3da108
+
+Origin: android.googlesource.com/kernel/common be7eb82f26606f1965d7d4b053e82570ea5f48a1
+Batch: B-1 (P4 stability & functional backports) - Class A, apply as-is; predicted ABI delta zero
+
+---
+diff --git a/net/nfc/llcp_sock.c b/net/nfc/llcp_sock.c
+index d5344563e5..cd1fdf0bee 100644
+--- a/net/nfc/llcp_sock.c
++++ b/net/nfc/llcp_sock.c
+@@ -633,6 +633,8 @@ static int llcp_sock_release(struct socket *sock)
+ 
+ 	if (sock->type == SOCK_RAW)
+ 		nfc_llcp_sock_unlink(&local->raw_sockets, sk);
++	else if (sk->sk_state == LLCP_CONNECTING)
++		nfc_llcp_sock_unlink(&local->connecting_sockets, sk);
+ 	else
+ 		nfc_llcp_sock_unlink(&local->sockets, sk);
+ 
