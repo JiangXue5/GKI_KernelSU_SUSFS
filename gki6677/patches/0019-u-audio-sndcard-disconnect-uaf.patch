@@ -1,0 +1,97 @@
+From: Sonali Pradhan <sonalipradhan@google.com>
+Date: Mon Aug 10 07:12:37 2026 +0000
+Subject: [PATCH] UPSTREAM: usb: gadget: u_audio: Fix use-after-free on sound card disconnect
+
+commit 858965947081d10d41d9a1010a540d3d5eea958b upstream.
+
+g_audio_cleanup() invokes snd_card_free_when_closed() to initiate sound
+card teardown and immediately frees the underlying struct snd_uac_chip
+context. However, snd_card_free_when_closed() returns asynchronously
+while ALSA control elements (kctls) remain open in userspace.
+
+When userspace control applications access or close these open file
+descriptors, kctl callbacks attempt to dereference kctl->private_data
+pointing to &uac->c_prm or &uac->p_prm within the freed uac structure,
+resulting in a use-after-free (UAF) memory corruption.
+
+Fix this issue by deferring the destruction of struct snd_uac_chip until
+all references to the ALSA sound card are released. Register a custom
+card->private_free callback (u_audio_card_free) during g_audio_setup()
+that frees uac and its associated playback/capture request and ring
+buffers only when the sound card reference count drops to zero.
+
+Fixes: 6c67ed9ad9b8 ("usb: gadget: u_audio: don't let userspace block driver unbind")
+Cc: stable@vger.kernel.org
+Signed-off-by: Sonali Pradhan <sonalipradhan@google.com>
+Link: https://patch.msgid.link/20260810071237.2207680-1-sonalipradhan@google.com
+Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+Bug: 497972009
+(cherry picked from commit 891a8d11f4d5eb50b2ce7570f4f98204a7a57493
+ https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git
+ linux-6.6.y)
+Change-Id: I1fd2a80195e7e03e5f8f5afd2a0c38b31df2f427
+Signed-off-by: Sonali Pradhan <sonalipradhan@google.com>
+(cherry picked from commit 7f6d93764982f312e126d27b4594ff1761c66217)
+Signed-off-by: Sonali Pradhan <sonalipradhan@google.com>
+
+Origin: android.googlesource.com/kernel/common 4dd0a881a4ea774770b5d139cda53d6e7f5a17df
+Batch: B-1 (P4 stability & functional backports) - Class A, apply as-is; predicted ABI delta zero
+
+---
+diff --git a/drivers/usb/gadget/function/u_audio.c b/drivers/usb/gadget/function/u_audio.c
+index 0be0966973..6cbcb8c471 100644
+--- a/drivers/usb/gadget/function/u_audio.c
++++ b/drivers/usb/gadget/function/u_audio.c
+@@ -1177,6 +1177,20 @@ static struct snd_kcontrol_new u_audio_controls[]  = {
+ 	},
+ };
+ 
++static void u_audio_card_free(struct snd_card *card)
++{
++	struct snd_uac_chip *uac = card->private_data;
++
++	if (!uac)
++		return;
++
++	kfree(uac->p_prm.reqs);
++	kfree(uac->c_prm.reqs);
++	kfree(uac->p_prm.rbuf);
++	kfree(uac->c_prm.rbuf);
++	kfree(uac);
++}
++
+ int g_audio_setup(struct g_audio *g_audio, const char *pcm_name,
+ 					const char *card_name)
+ {
+@@ -1258,6 +1272,8 @@ int g_audio_setup(struct g_audio *g_audio, const char *pcm_name,
+ 		goto fail;
+ 
+ 	uac->card = card;
++	card->private_data = uac;
++	card->private_free = u_audio_card_free;
+ 
+ 	/*
+ 	 * Create first PCM device
+@@ -1425,6 +1441,8 @@ int g_audio_setup(struct g_audio *g_audio, const char *pcm_name,
+ 
+ snd_fail:
+ 	snd_card_free(card);
++	return err;
++
+ fail:
+ 	kfree(uac->p_prm.reqs);
+ 	kfree(uac->c_prm.reqs);
+@@ -1450,12 +1468,6 @@ void g_audio_cleanup(struct g_audio *g_audio)
+ 	card = uac->card;
+ 	if (card)
+ 		snd_card_free_when_closed(card);
+-
+-	kfree(uac->p_prm.reqs);
+-	kfree(uac->c_prm.reqs);
+-	kfree(uac->p_prm.rbuf);
+-	kfree(uac->c_prm.rbuf);
+-	kfree(uac);
+ }
+ EXPORT_SYMBOL_GPL(g_audio_cleanup);
+ 
