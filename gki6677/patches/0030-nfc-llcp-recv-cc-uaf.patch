@@ -1,0 +1,63 @@
+From: Lee Jones <lee@kernel.org>
+Date: Wed Apr 29 13:40:42 2026 +0000
+Subject: [PATCH] FROMGIT: nfc: llcp: Fix use-after-free race in nfc_llcp_recv_cc()
+
+A race condition exists in the NFC LLCP connection state machine where
+the connection acceptance packet (CC) can be processed concurrently with
+socket release.  This can lead to a use-after-free of the socket object.
+
+When nfc_llcp_recv_cc() moves the socket from the connecting_sockets
+list to the sockets list, it does so without holding the socket lock.
+If llcp_sock_release() is executing concurrently, it might have already
+unlinked the socket and dropped its references, which can result in
+nfc_llcp_recv_cc() linking a freed socket into the live list.
+
+Fix this by holding lock_sock() during the state transition and list
+movement in nfc_llcp_recv_cc().  After acquiring the lock, check if
+the socket is still hashed to ensure it hasn't already been unlinked
+and marked for destruction by the release path.  This aligns the locking
+pattern with recv_hdlc() and recv_disc().
+
+Bug: 500030631
+Fixes: a69f32af86e3 ("NFC: Socket linked list")
+Signed-off-by: Lee Jones <lee@kernel.org>
+Reviewed-by: Simon Horman <horms@kernel.org>
+Link: https://patch.msgid.link/20260429134115.3558604-2-lee@kernel.org
+Signed-off-by: David Heidelberg <david@ixit.cz>
+(cherry picked from commit ad649195b13402c8ea5654cb45194481b257bf0f) # linux-nfc
+Signed-off-by: Lee Jones <joneslee@google.com>
+Change-Id: I696d43f7de9158684746601c456bb4b0e84c61a4
+
+Origin: android.googlesource.com/kernel/common e63aaa33966a89eca6ec07492b0525f0db045bc4
+Batch: B-1 (P4 stability & functional backports) - Class A, apply as-is; predicted ABI delta zero
+
+---
+diff --git a/net/nfc/llcp_core.c b/net/nfc/llcp_core.c
+index d9562840fa..62b0f2d668 100644
+--- a/net/nfc/llcp_core.c
++++ b/net/nfc/llcp_core.c
+@@ -1216,6 +1216,15 @@ static void nfc_llcp_recv_cc(struct nfc_llcp_local *local,
+ 
+ 	sk = &llcp_sock->sk;
+ 
++	lock_sock(sk);
++
++	/* Check if socket was destroyed whilst waiting for the lock */
++	if (!sk_hashed(sk)) {
++		release_sock(sk);
++		nfc_llcp_sock_put(llcp_sock);
++		return;
++	}
++
+ 	/* Unlink from connecting and link to the client array */
+ 	nfc_llcp_sock_unlink(&local->connecting_sockets, sk);
+ 	nfc_llcp_sock_link(&local->sockets, sk);
+@@ -1227,6 +1236,8 @@ static void nfc_llcp_recv_cc(struct nfc_llcp_local *local,
+ 	sk->sk_state = LLCP_CONNECTED;
+ 	sk->sk_state_change(sk);
+ 
++	release_sock(sk);
++
+ 	nfc_llcp_sock_put(llcp_sock);
+ }
+ 
