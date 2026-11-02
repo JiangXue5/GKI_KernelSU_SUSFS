@@ -1,0 +1,70 @@
+From: Marc Zyngier <maz@kernel.org>
+Date: Thu Nov 20 17:24:55 2025 +0000
+Subject: [PATCH] FROMGIT: KVM: arm64: vgic-v3: Fix GICv3 trapping in protected mode
+
+As we are about to start trapping a bunch of extra things, augment
+the pKVM trap description with all the registers trapped by ICH_HCR_EL2.TC,
+making them legal instead of resulting in a UNDEF injection in the guest.
+
+While we're at it, ensure that pKVM captures the vgic model so that it
+can be checked by the emulation code.
+
+Bug: 458241298
+(cherry picked from commit 567ebfedb5bd204a8ce6a11695f02730f1bf57f4
+ https://git.kernel.org/pub/scm/linux/kernel/git/kvmarm/kvmarm.git next)
+Tested-by: Fuad Tabba <tabba@google.com>
+Signed-off-by: Marc Zyngier <maz@kernel.org>
+Tested-by: Mark Brown <broonie@kernel.org>
+Link: https://msgid.link/20251120172540.2267180-6-maz@kernel.org
+Signed-off-by: Oliver Upton <oupton@kernel.org>
+Signed-off-by: Fuad Tabba <tabba@google.com>
+Change-Id: Ie0a08a40f789882cd54f18e072e7ffbdc736a0a0
+
+Origin: android.googlesource.com/kernel/common ed88593b89e8bcf162b9fdd14a24e9c4e9966664
+Batch: B-2 (P4 kvm/pKVM cluster) - Class A, apply as-is; predicted ABI delta zero
+
+---
+diff --git a/arch/arm64/kvm/hyp/nvhe/pkvm.c b/arch/arm64/kvm/hyp/nvhe/pkvm.c
+index 4a381fe..dd4899d 100644
+--- a/arch/arm64/kvm/hyp/nvhe/pkvm.c
++++ b/arch/arm64/kvm/hyp/nvhe/pkvm.c
+@@ -447,9 +447,13 @@ struct pkvm_hyp_vcpu *pkvm_get_loaded_hyp_vcpu(void)
+ 
+ static void pkvm_vcpu_init_features_from_host(struct pkvm_hyp_vcpu *hyp_vcpu)
+ {
++	struct pkvm_hyp_vm *hyp_vm = pkvm_hyp_vcpu_to_hyp_vm(hyp_vcpu);
+ 	struct kvm_vcpu *host_vcpu = hyp_vcpu->host_vcpu;
+ 	DECLARE_BITMAP(allowed_features, KVM_VCPU_MAX_FEATURES);
+ 
++	/* Preserve the vgic model so that GICv3 emulation works */
++	hyp_vm->kvm.arch.vgic.vgic_model = hyp_vm->host_kvm->arch.vgic.vgic_model;
++
+ 	/* No restrictions for non-protected VMs. */
+ 	if (!pkvm_hyp_vcpu_is_protected(hyp_vcpu)) {
+ 		bitmap_copy(hyp_vcpu->vcpu.arch.features,
+diff --git a/arch/arm64/kvm/hyp/nvhe/sys_regs.c b/arch/arm64/kvm/hyp/nvhe/sys_regs.c
+index 78aab26..fdcfd61 100644
+--- a/arch/arm64/kvm/hyp/nvhe/sys_regs.c
++++ b/arch/arm64/kvm/hyp/nvhe/sys_regs.c
+@@ -446,6 +446,8 @@ static const struct sys_reg_desc pvm_sys_reg_descs[] = {
+ 	ID_UNALLOCATED(7,6),
+ 	ID_UNALLOCATED(7,7),
+ 
++	HOST_HANDLED(SYS_ICC_PMR_EL1),
++
+ 	RAZ_WI(SYS_ERRIDR_EL1),
+ 	RAZ_WI(SYS_ERRSELR_EL1),
+ 	RAZ_WI(SYS_ERXFR_EL1),
+@@ -459,9 +461,12 @@ static const struct sys_reg_desc pvm_sys_reg_descs[] = {
+ 
+ 	/* Limited Ordering Regions Registers are restricted. */
+ 
++	HOST_HANDLED(SYS_ICC_DIR_EL1),
++	HOST_HANDLED(SYS_ICC_RPR_EL1),
+ 	HOST_HANDLED(SYS_ICC_SGI1R_EL1),
+ 	HOST_HANDLED(SYS_ICC_ASGI1R_EL1),
+ 	HOST_HANDLED(SYS_ICC_SGI0R_EL1),
++	HOST_HANDLED(SYS_ICC_CTLR_EL1),
+ 	{ SYS_DESC(SYS_ICC_SRE_EL1), .access = pvm_gic_read_sre, },
+ 
+ 	HOST_HANDLED(SYS_CCSIDR_EL1),
