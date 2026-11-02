@@ -1,0 +1,61 @@
+From: Mostafa Saleh <smostafa@google.com>
+Date: Wed Jun 17 14:51:27 2026 +0000
+Subject: [PATCH] FROMLIST: KVM: arm64: Fix bounds checking in do_ffa_mem_reclaim()
+
+Sashiko (locally) reports out of bound write possiblity if SPMD
+returns an invalid data.
+
+While SPMD is considered trusted, pKVM does some basic checks,
+for offset to be less than or equal len.
+
+However, that is incorrect as even if the offset is smaller than
+len pKVM can still access out of bound memory in the next
+ffa_host_unshare_ranges().
+
+Split this check into 2:
+1- Check that the fixed portion of the descriptor fits.
+2- After getting reg, check the variable array size addr_range_cnt
+   fits.
+
+Also, drop the WARN_ONs as that will panic the kernel and in the
+next checks there are no WARNs, so that makes it consistent.
+
+Bug: 503389212
+Link: https://lore.kernel.org/all/20260702103848.1647249-4-sebastianene@google.com/
+Fixes: 0a9f15fd5674 ("KVM: arm64: pkvm: Add support for fragmented FF-A descriptors")
+Change-Id: I03c41b4228a69ab120ac76d9d1d0c18abfec3c1e
+Signed-off-by: Mostafa Saleh <smostafa@google.com>
+Reviewed-by: Vincent Donnefort <vdonnefort@google.com>
+Signed-off-by: Sebastian Ene <sebastianene@google.com>
+
+Origin: android.googlesource.com/kernel/common 533acd44c5f35f0dc544c967eda6b6be6e060564
+Batch: B-2 (P4 kvm/pKVM cluster) - Class A, apply as-is; predicted ABI delta zero
+
+---
+diff --git a/arch/arm64/kvm/hyp/nvhe/ffa.c b/arch/arm64/kvm/hyp/nvhe/ffa.c
+index 6f7791f..2bf49d6 100644
+--- a/arch/arm64/kvm/hyp/nvhe/ffa.c
++++ b/arch/arm64/kvm/hyp/nvhe/ffa.c
+@@ -565,8 +565,8 @@ static void do_ffa_mem_reclaim(struct arm_smccc_res *res,
+ 	 * check that we end up with something that doesn't look _completely_
+ 	 * bogus.
+ 	 */
+-	if (WARN_ON(offset > len ||
+-		    fraglen > KVM_FFA_MBOX_NR_PAGES * PAGE_SIZE)) {
++	if (offset + CONSTITUENTS_OFFSET(0) > len ||
++	    fraglen > KVM_FFA_MBOX_NR_PAGES * PAGE_SIZE) {
+ 		ret = FFA_RET_ABORTED;
+ 		ffa_rx_release(res);
+ 		goto out_unlock;
+@@ -599,6 +599,11 @@ static void do_ffa_mem_reclaim(struct arm_smccc_res *res,
+ 		goto out_unlock;
+ 
+ 	reg = (void *)buf + offset;
++	if (offset + CONSTITUENTS_OFFSET(reg->addr_range_cnt) > len) {
++		ret = FFA_RET_ABORTED;
++		goto out_unlock;
++	}
++
+ 	/* If the SPMD was happy, then we should be too. */
+ 	WARN_ON(ffa_host_unshare_ranges(reg->constituents,
+ 					reg->addr_range_cnt));
