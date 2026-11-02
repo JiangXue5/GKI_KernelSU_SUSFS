@@ -1,0 +1,81 @@
+From: Vincent Donnefort <vdonnefort@google.com>
+Date: Thu Sep 10 15:18:01 2026 +0100
+Subject: [PATCH] ANDROID: KVM: arm64: Fix mmap_read_lock for protected-VM THP adjustment
+
+In pkvm_mem_abort(), __pkvm_pin_user_pages() takes and then drops the
+mmap_read_lock() right before __pkvm_pages_to_ppages() is called,
+leaving the stage-1 page table parsing in transparent_hugepage_adjust()
+unprotected.
+
+If the guest shares the unpinned memory back, the host allocator will
+blindly use those pages for host private data while the guest retains
+access, compromising host isolation.
+
+Hoist mmap_read_lock() into pkvm_mem_abort() to span both page pinning
+and THP adjustments continuously.
+
+Bug: 559603594
+Fixes: 5d9808b9071c ("ANDROID: KVM: arm64: THP support for pKVM guests")
+Change-Id: Ib06098b1e2edf013406042cdcd0d77d5b77f2522
+Signed-off-by: Vincent Donnefort <vdonnefort@google.com>
+
+[gki6677 reshape note - 2026-11-02, Z.ai]
+Reshaped for the 6.6.77 pin. The fix holds the mmap read lock from
+pin_user_pages() through the THP adjustment instead of dropping it
+immediately. The pin's pkvm_mem_abort() mid-section is an older
+vintage (maple-tree reservation + retry loop, no mmu_lock read
+section, no kvm_pinned_pages_iter_first, no negative page_size
+retry), so the exit-path graph differs from upstream: the
+-EHWPOISON/-EFAULT/-EIO branch unlocks apply as-is; the third
+unlock is re-placed right after transparent_hugepage_adjust() and
+before the maple-tree reservation/retry section (upstream releases
+after its mmu_lock read-section) - identical hold window
+(GUP -> THP adjust), released before account_locked_vm(), which
+takes the mmap write lock internally (a held read lock there would
+self-deadlock). Every remaining exit (unpin / free_ppage /
+err_unlock / retry) sits after the release point. Upstream hunks
+4-5 (__pkvm_pin_user_pages / __pkvm_pgtable_stage2_split) are
+skipped: both functions are absent at the pin (as triaged).
+Verified: strict git apply on the pin replica + exit-path walk.
+
+Origin: android.googlesource.com/kernel/common 4863da38964d78a50d5fffa4dfebdc985e581e83
+Batch: B-2 (P4 kvm/pKVM cluster) - Class B, RESHAPED for the pin; predicted ABI delta zero
+
+---
+diff --git a/arch/arm64/kvm/mmu.c b/arch/arm64/kvm/mmu.c
+index a152d646d..fc4fe8a47 100644
+--- a/arch/arm64/kvm/mmu.c
++++ b/arch/arm64/kvm/mmu.c
+@@ -1731,14 +1731,15 @@ static int pkvm_mem_abort(struct kvm_vcpu *vcpu, phys_addr_t *fault_ipa,
+ 
+ 	mmap_read_lock(mm);
+ 	ret = pin_user_pages(hva, 1, flags, &page);
+-	mmap_read_unlock(mm);
+ 
+ 	if (ret == -EHWPOISON) {
+ 		kvm_send_hwpoison_signal(hva, PAGE_SHIFT);
+ 		ret = 0;
++		mmap_read_unlock(mm);
+ 		goto free_ppage;
+ 	} else if (ret != 1) {
+ 		ret = -EFAULT;
++		mmap_read_unlock(mm);
+ 		goto free_ppage;
+ 	} else if (kvm->arch.pkvm.enabled && !PageSwapBacked(page)) {
+ 		/*
+@@ -1756,6 +1757,7 @@ static int pkvm_mem_abort(struct kvm_vcpu *vcpu, phys_addr_t *fault_ipa,
+ 		 * prevent try_to_unmap() from succeeding.
+ 		 */
+ 		ret = -EIO;
++		mmap_read_unlock(mm);
+ 		goto unpin;
+ 	}
+ 
+@@ -1766,6 +1768,7 @@ static int pkvm_mem_abort(struct kvm_vcpu *vcpu, phys_addr_t *fault_ipa,
+ 						fault_ipa);
+ 	page = pfn_to_page(pfn);
+ 
++		mmap_read_unlock(mm);
+ retry:
+ 	if (size)
+ 		*size = page_size;
