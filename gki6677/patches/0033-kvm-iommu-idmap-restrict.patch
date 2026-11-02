@@ -1,0 +1,66 @@
+From: Mostafa Saleh <smostafa@google.com>
+Date: Wed Apr 9 09:43:32 2025 +0000
+Subject: [PATCH] ANDROID: KVM: iommu: Restrict access KVM_IOMMU_DOMAIN_IDMAP_ID
+
+KVM_IOMMU_DOMAIN_IDMAP_ID should only mirror the host stage-2,
+without interaction with pv interface.
+
+Bug: 277989609
+Bug: 278749606
+Change-Id: I6d9800c1a12c9f4dbfbb51c22f589614424aabaa
+Signed-off-by: Mostafa Saleh <smostafa@google.com>
+
+[gki6677 reshape note - 2026-11-02, Z.ai]
+Reshaped for the 6.6.77 pin (deprecated/android15-6.6-2025-03 @
+8d05d8f2439f) as recorded in the B-2 triage: (1) the map-guard
+returns 0 instead of upstream's -EINVAL - at the pin
+kvm_iommu_map_pages() returns the size_t mapped count, so -EINVAL
+would read back as a huge count (same pin-contract reasoning as
+Batch A 0003); (2) the map/unmap hunks re-anchor after the
+IS_ALIGNED guards shipped in Batch A 0003 (upstream order overflow
+-> IS_ALIGNED -> IDMAP guard preserved). The unmap and
+iova_to_phys guards are verbatim, and the resulting post-state is
+byte-identical to upstream modulo the documented map-guard error
+code. Upstream's own error-code conversion (2a89c059adae,
+"iommu: Return map error code") is deliberately not shipped - see
+the B-2 skip list. Verified: strict git apply on the pin replica
++ guard-by-guard compare vs the upstream post-state.
+
+Origin: android.googlesource.com/kernel/common 1a45ce72b0cfc24e01d278723754ecdb23de2c15
+Batch: B-2 (P4 kvm/pKVM cluster) - Class B, RESHAPED for the pin; predicted ABI delta zero
+
+---
+diff --git a/arch/arm64/kvm/hyp/nvhe/iommu/iommu.c b/arch/arm64/kvm/hyp/nvhe/iommu/iommu.c
+index 978e86cbc..cfcbeea33 100644
+--- a/arch/arm64/kvm/hyp/nvhe/iommu/iommu.c
++++ b/arch/arm64/kvm/hyp/nvhe/iommu/iommu.c
+@@ -500,6 +500,9 @@ size_t kvm_iommu_map_pages(pkvm_handle_t domain_id, unsigned long iova,
+ 	if (!IS_ALIGNED(iova | paddr, pgsize))
+ 		return 0;
+ 
++	if (domain_id == KVM_IOMMU_DOMAIN_IDMAP_ID)
++		return 0;
++
+ 	domain = handle_to_domain(domain_id);
+ 	if (!domain || domain_get(domain))
+ 		return 0;
+@@ -599,6 +602,9 @@ size_t kvm_iommu_unmap_pages(pkvm_handle_t domain_id,
+ 	if (!IS_ALIGNED(iova, pgsize))
+ 		return 0;
+ 
++	if (domain_id == KVM_IOMMU_DOMAIN_IDMAP_ID)
++		return 0;
++
+ 	domain = handle_to_domain(domain_id);
+ 	if (!domain || domain_get(domain))
+ 		return 0;
+@@ -630,6 +636,9 @@ phys_addr_t kvm_iommu_iova_to_phys(pkvm_handle_t domain_id, unsigned long iova)
+ 	if (!kvm_iommu_ops || !kvm_iommu_ops->iova_to_phys)
+ 		return 0;
+ 
++	if (domain_id == KVM_IOMMU_DOMAIN_IDMAP_ID)
++		return iova;
++
+ 	domain = handle_to_domain( domain_id);
+ 
+ 	if (!domain || domain_get(domain))
