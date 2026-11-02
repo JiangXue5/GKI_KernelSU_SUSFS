@@ -1,0 +1,46 @@
+From: Vincent Donnefort <vdonnefort@google.com>
+Date: Fri Aug 22 09:06:19 2025 +0100
+Subject: [PATCH] ANDROID: KVM: arm64: Fix hyp_alloc() upper size check
+
+The maximum size is of an allocation is bound to the u32 type of alloc
+in struct chunk_hdr.
+
+Bug: 431949921
+Bug: 357781595
+Reported-by: Hiroyuki Katsura <hk590@cam.ac.uk>
+Change-Id: Ifedf1e778afd9c728b654ac223f5f725edc65034
+Signed-off-by: Vincent Donnefort <vdonnefort@google.com>
+
+Origin: android.googlesource.com/kernel/common ef2e2217b16213c2cc252f790eea2a57a3d2e7fb
+Batch: B-2 (P4 kvm/pKVM cluster) - Class A, apply as-is; predicted ABI delta zero
+
+---
+diff --git a/arch/arm64/kvm/hyp/nvhe/alloc.c b/arch/arm64/kvm/hyp/nvhe/alloc.c
+index 13f7778..90b644f 100644
+--- a/arch/arm64/kvm/hyp/nvhe/alloc.c
++++ b/arch/arm64/kvm/hyp/nvhe/alloc.c
+@@ -556,6 +556,12 @@ void *hyp_alloc(size_t size)
+ 	unsigned long chunk_addr;
+ 	int missing_map, ret = 0;
+ 
++	/* constrained by chunk_hdr *_size types */
++	if (size > U32_MAX) {
++		ret = -E2BIG;
++		goto end_unlocked;
++	}
++
+ 	size = ALIGN(size ?: MIN_ALLOC, MIN_ALLOC);
+ 
+ 	hyp_spin_lock(&allocator->lock);
+@@ -591,9 +597,11 @@ void *hyp_alloc(size_t size)
+ 	}
+ 
+ 	WARN_ON(chunk_install(chunk, size, last_chunk, allocator));
++
+ end:
+ 	hyp_spin_unlock(&allocator->lock);
+ 
++end_unlocked:
+ 	*(this_cpu_ptr(&hyp_allocator_errno)) = ret;
+ 
+ 	/* Enforce zeroing allocated memory */
