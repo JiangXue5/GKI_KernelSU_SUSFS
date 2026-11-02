@@ -1,0 +1,65 @@
+From: Mostafa Saleh <smostafa@google.com>
+Date: Wed Sep 10 10:49:26 2025 +0000
+Subject: [PATCH] ANDROID: KVM: Fix error path of allocator topup
+
+When topup of a hypervisor allocator fails, __pkvm_topup_hyp_alloc_mgt_gfp()
+will try to free the memcache. However, some prefix of it might be already
+donated, which will cause a panic when the kernel touches the hypervisor
+memory.
+This patch fixes this, by making the hypervisor return the suffix of the
+memcache that was not donated, so the kernel can free it.
+
+Bug: 443560485
+Change-Id: I91ec95fbd2a23049cb374464e74c54142678dc49
+Signed-off-by: Mostafa Saleh <smostafa@google.com>
+
+Origin: android.googlesource.com/kernel/common 21e2595401ca319ace040640cb7f2bc27d2ebf86
+Batch: B-2 (P4 kvm/pKVM cluster) - Class A, apply as-is; predicted ABI delta zero
+
+---
+diff --git a/arch/arm64/kvm/hyp/nvhe/hyp-main.c b/arch/arm64/kvm/hyp/nvhe/hyp-main.c
+index 7fd93d0..e183bab 100644
+--- a/arch/arm64/kvm/hyp/nvhe/hyp-main.c
++++ b/arch/arm64/kvm/hyp/nvhe/hyp-main.c
+@@ -1469,6 +1469,8 @@ static void handle___pkvm_hyp_alloc_mgt_refill(struct kvm_cpu_context *host_ctxt
+ 	};
+ 
+ 	cpu_reg(host_ctxt, 1) = hyp_alloc_mgt_refill(id, &mc);
++	cpu_reg(host_ctxt, 2) = mc.head;
++	cpu_reg(host_ctxt, 3) = mc.nr_pages;
+ }
+ 
+ static void handle___pkvm_hyp_alloc_mgt_reclaimable(struct kvm_cpu_context *host_ctxt)
+diff --git a/arch/arm64/kvm/pkvm.c b/arch/arm64/kvm/pkvm.c
+index addae8d..fa19661 100644
+--- a/arch/arm64/kvm/pkvm.c
++++ b/arch/arm64/kvm/pkvm.c
+@@ -1050,8 +1050,13 @@ EXPORT_SYMBOL(__pkvm_register_el2_call);
+ 
+ int __pkvm_topup_hyp_alloc_mgt_mc(unsigned long id, struct kvm_hyp_memcache *mc)
+ {
+-	return kvm_call_hyp_nvhe(__pkvm_hyp_alloc_mgt_refill, id, mc->head,
+-				 mc->nr_pages);
++	struct arm_smccc_res res;
++
++	res = kvm_call_hyp_nvhe_smccc(__pkvm_hyp_alloc_mgt_refill,
++				      id, mc->head, mc->nr_pages);
++	mc->head = res.a2;
++	mc->nr_pages = res.a3;
++	return res.a1;
+ }
+ EXPORT_SYMBOL(__pkvm_topup_hyp_alloc_mgt_mc);
+ 
+@@ -1068,8 +1073,11 @@ int __pkvm_topup_hyp_alloc_mgt_gfp(unsigned long id, unsigned long nr_pages,
+ 		return ret;
+ 
+ 	ret = __pkvm_topup_hyp_alloc_mgt_mc(id, &mc);
+-	if (ret)
++	if (ret) {
++		kvm_err("Failed topup %ld pages = %ld, size = %ld err = %d, freeing %ld pages\n",
++			id, nr_pages, sz_alloc, ret, mc.nr_pages);
+ 		free_hyp_memcache(&mc);
++	}
+ 
+ 	return ret;
+ }
