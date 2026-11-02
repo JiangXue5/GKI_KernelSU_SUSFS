@@ -1,0 +1,31 @@
+From: Will Deacon <willdeacon@google.com>
+Date: Wed Apr 22 12:35:50 2026 +0100
+Subject: [PATCH] ANDROID: KVM: arm64: Fix rb_cpu_fits_desc() invocation from pKVM tracing
+
+When initialising pKVM trace buffers, rb_cpu_fits_desc() is invoked
+with the untrusted host virtual address for the trace descriptors
+rather than the hypervisor virtual address. This makes subsequent bounds
+comparisons nonsensical, so pass the hypervisor VA instead.
+
+Cc: Vincent Donnefort <vdonnefort@google.com>
+Signed-off-by: Will Deacon <willdeacon@google.com>
+Bug: 503395542
+Change-Id: Ic15a5d415a6510d45a6f04e9ca8174a6d0f58834
+
+Origin: android.googlesource.com/kernel/common 8be8949794c96f10348fdd3d8dc7740fdfecd4e2
+Batch: B-2 (P4 kvm/pKVM cluster) - Class A, apply as-is; predicted ABI delta zero
+
+---
+diff --git a/arch/arm64/kvm/hyp/nvhe/trace.c b/arch/arm64/kvm/hyp/nvhe/trace.c
+index 20460aa..a08b912 100644
+--- a/arch/arm64/kvm/hyp/nvhe/trace.c
++++ b/arch/arm64/kvm/hyp/nvhe/trace.c
+@@ -491,7 +491,7 @@ int __pkvm_load_tracing(unsigned long desc_hva, size_t desc_size)
+ 		unsigned int cpu;
+ 
+ 		ret = -EINVAL;
+-		if (!rb_cpu_fits_desc(pdesc, desc_hva + desc_size))
++		if (!rb_cpu_fits_desc(pdesc, (unsigned long)desc + desc_size))
+ 			break;
+ 
+ 		cpu = pdesc->cpu;
