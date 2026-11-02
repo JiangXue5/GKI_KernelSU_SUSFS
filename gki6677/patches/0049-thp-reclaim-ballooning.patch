@@ -1,0 +1,55 @@
+From: Vincent Donnefort <vdonnefort@google.com>
+Date: Wed Mar 5 17:04:23 2025 +0000
+Subject: [PATCH] ANDROID: KVM: arm64: Fix THPs reclaim with ballooning
+
+A ppage content can't be read without either that ppage out of the
+pinned_page tree or without the mmu_lock taken. Fix potential race
+between vCPUS to decrease ppage->pins and free the page.
+
+Also the memory accounting was wrong. Once the huge-page is freed, we
+need to account for that entire size.
+
+Bug: 278749606
+Bug: 278011447
+Bug: 400307522
+Fixes: e602818486b6 ("ANDROID: KVM: arm64: Huge page support for pkvm_pinned_page")
+Change-Id: I1a9f29ce9e63d707f59129aafd78e3d1d858614f
+Signed-off-by: Vincent Donnefort <vdonnefort@google.com>
+
+Origin: android.googlesource.com/kernel/common 63a99c1fb8e57d859ec3f51d49f4d74fbf84f3b8
+Batch: B-2 (P4 kvm/pKVM cluster) - Class A, apply as-is; predicted ABI delta zero
+
+---
+diff --git a/arch/arm64/kvm/pkvm.c b/arch/arm64/kvm/pkvm.c
+index e04bb2f..1b93341 100644
+--- a/arch/arm64/kvm/pkvm.c
++++ b/arch/arm64/kvm/pkvm.c
+@@ -539,6 +539,7 @@ void pkvm_host_reclaim_page(struct kvm *host_kvm, phys_addr_t ipa)
+ 	struct mm_struct *mm = current->mm;
+ 	struct kvm_pinned_page *ppage;
+ 	unsigned long index = ipa;
++	u16 pins;
+ 
+ 	write_lock(&host_kvm->mmu_lock);
+ 	ppage = mt_find(&host_kvm->arch.pkvm.pinned_pages, &index,
+@@ -549,16 +550,16 @@ void pkvm_host_reclaim_page(struct kvm *host_kvm, phys_addr_t ipa)
+ 		else
+ 			WARN_ON(1);
+ 
+-		if (!ppage->pins)
++		pins = ppage->pins;
++		if (!pins)
+ 			mtree_erase(&host_kvm->arch.pkvm.pinned_pages, ipa);
+ 	}
+ 	write_unlock(&host_kvm->mmu_lock);
+ 
+-	WARN_ON(!ppage);
+-	if (!ppage || ppage->pins)
++	if (WARN_ON(!ppage) || pins)
+ 		return;
+ 
+-	account_locked_vm(mm, 1, false);
++	account_locked_vm(mm, 1 << ppage->order, false);
+ 	unpin_user_pages_dirty_lock(&ppage->page, 1, host_kvm->arch.pkvm.enabled);
+ 	kfree(ppage);
+ }
