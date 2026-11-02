@@ -1,0 +1,71 @@
+From: Will Deacon <willdeacon@google.com>
+Date: Tue Apr 21 13:44:28 2026 +0100
+Subject: [PATCH] ANDROID: KVM: arm64: Handle missing userspace mapping in pKVM mem abort
+
+When a p-guest stage-2 fault occurs, the host looks at the stage-1
+mapping to check if it is backed by a single PAGE_SIZE page or a THP.
+
+Under heavy memory pressure, that userspace mapping can be momentarily
+absent which is unhandled in the abort path and will lead to a crash.
+
+Catch this error and skip the stage-2 mapping attempt. This fault will
+be retried later either on a subsequent memory access or via a new
+kvm_hyp_req.
+
+Bug: 500876966
+Bug: 503427706
+Change-Id: I940dc01e29454f75fe2a2766c61804ceba9e12d3
+Signed-off-by: Will Deacon <willdeacon@google.com>
+
+[gki6677 reshape note - 2026-11-02, Z.ai]
+Reshaped for the 6.6.77 pin. The pin's transparent_hugepage_adjust()
+returns long and propagates negative errnos from
+get_user_mapping_size() when the userspace mapping is momentarily
+absent (heavy memory pressure), but the pin stores the result into
+an unsigned long page_size - the error wraps into a garbage huge
+size and the abort path crashes (the exact scenario of Bugs
+500876966/503427706). Reshape: page_size split out of the pin's
+unsigned multi-declaration as long (upstream's vintage declares it
+standalone), and the upstream negative check inserted right after
+the adjust call. The new exit path additionally executes
+mmap_read_unlock(mm) before goto unpin, because our 0046 reshape
+holds the lock from pin_user_pages() through the adjustment
+(upstream releases earlier, so its form needs no unlock here).
+The -EAGAIN ? 0 : error form is kept verbatim from upstream. No
+-EAGAIN producer exists at the pin today; the form is future-proof
+and upstream-faithful. Verified: strict git apply on the pin
+replica + exit-path walk.
+
+Origin: android.googlesource.com/kernel/common 1569a00286640e452ce917ee8b3cec04c5cc3715
+Batch: B-2 (P4 kvm/pKVM cluster) - Class B, RESHAPED for the pin; predicted ABI delta zero
+
+---
+diff --git a/arch/arm64/kvm/mmu.c b/arch/arm64/kvm/mmu.c
+index fc4fe8a47..905f53099 100644
+--- a/arch/arm64/kvm/mmu.c
++++ b/arch/arm64/kvm/mmu.c
+@@ -1707,7 +1707,8 @@ static int pkvm_mem_abort(struct kvm_vcpu *vcpu, phys_addr_t *fault_ipa,
+ {
+ 	unsigned int flags = FOLL_HWPOISON | FOLL_LONGTERM | FOLL_WRITE;
+ 	struct kvm_hyp_memcache *hyp_memcache = &vcpu->arch.stage2_mc;
+-	unsigned long index, pmd_offset, page_size, end;
++	unsigned long index, pmd_offset, end;
++	long page_size;
+ 	struct mm_struct *mm = current->mm;
+ 	struct kvm_pinned_page *ppage;
+ 	struct kvm *kvm = vcpu->kvm;
+@@ -1766,6 +1767,14 @@ static int pkvm_mem_abort(struct kvm_vcpu *vcpu, phys_addr_t *fault_ipa,
+ 	page_size = transparent_hugepage_adjust(kvm, memslot,
+ 						hva, &pfn,
+ 						fault_ipa);
++
++	/* Stage-1 mapping missing. Retry the fault. */
++	if (page_size < 0) {
++		ret = page_size == -EAGAIN ? 0 : page_size;
++		mmap_read_unlock(mm);
++		goto unpin;
++	}
++
+ 	page = pfn_to_page(pfn);
+ 
+ 		mmap_read_unlock(mm);
