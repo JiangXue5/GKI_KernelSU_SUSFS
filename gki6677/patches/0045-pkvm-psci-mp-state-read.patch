@@ -61,7 +61,7 @@ index f7ed70d64..f9227d070 100644
  		goto done;
  
 -	ret = pkvm_vcpu_init_psci(hyp_vcpu);
-+		ret = pkvm_vcpu_init_psci(hyp_vcpu, mp_state);
++	ret = pkvm_vcpu_init_psci(hyp_vcpu, mp_state);
  	if (ret)
  		goto done;
  
