@@ -1,0 +1,117 @@
+From: Fuad Tabba <tabba@google.com>
+Date: Tue Mar 31 09:01:57 2026 +0000
+Subject: [PATCH] ANDROID: KVM: arm64: Fix TRBE and SPE handling during pKVM world switch
+
+In pKVM, host `iflags` aren't copied to the shadow vCPU, leaving
+`DEBUG_STATE_SAVE_{TRBE,SPE}` at 0 at EL2. This bypasses debug save
+routines, leaving TRBE active. The resulting speculative Stage-2 walks
+cause MMU fault storms and hard lockups during TLB invalidations.
+
+A previous fix cached the sanitized `id_aa64dfr0_el1_sys_val` during
+vCPU init. This failed because:
+1. `TraceBuffer` is absent from `ftr_id_aa64dfr0` (yielding 0).
+2. Init-time caching breaks on asymmetric cores if a vCPU migrates
+   from a core without TRBE to one with it.
+
+Instead of relying on host `iflags` or init-time caching, we
+dynamically evaluate the raw `SYS_ID_AA64DFR0_EL1` register of the
+CURRENT physical CPU directly at EL2 during world switch. This
+isolates EL2 from the untrusted host and natively handles core
+migrations.
+
+Upstream commit 38131c02a53f ("KVM: arm64: Track presence of SPE/TRBE
+in kvm_host_data instead of vCPU") solves this by caching capabilities
+at early boot. Backporting it requires significant KVM debug
+refactoring (e.g., 2417218f2f23 ("KVM: arm64: Get rid of
+__kvm_get_mdcr_el2() and related warts")). Dynamic EL2 evaluation
+provides the same hardware- accurate isolation without the backporting
+burden.
+
+For non-pKVM, we continue trusting the host's `DEBUG_STATE_SAVE`
+flags.
+
+Additionally, we explicitly check the Prohibited (.P) bits in
+`SYS_TRBIDR_EL1` and `SYS_PMBIDR_EL1` to prevent UNDEFINED exceptions
+if EL3 prohibits EL2 access to the trace limit registers.
+
+Bug: 473214797
+Change-Id: I462754515e30067c8f889d5610ac90e65905a6d1
+Signed-off-by: Fuad Tabba <tabba@google.com>
+
+[gki6677 reshape note - 2026-11-02, Z.ai]
+Reshaped for the 6.6.77 pin: the runtime ID-register logic ships
+verbatim - all symbols resolve at this vintage (ID_AA64DFR0_EL1_
+PMSVer / ID_AA64DFR0_EL1_TraceBuffer, SYS_PMBIDR_EL1, PMBIDR_EL1_P,
+SYS_TRBIDR_EL1, TRBIDR_EL1_P from the tools/sysreg-generated defs;
+is_protected_kvm_enabled from asm/virt.h). The call-site lines
+keep the pin's older SPE helpers: __debug_save_spe /
+__debug_restore_spe take ONE argument at the pin - the second
+(pmblimitr_el1) parameter and the matching kvm_host_data field
+arrive with a later commit the pin does not carry; the trace
+helpers already match upstream's two-arg form. Both hunks
+re-anchor accordingly. Must follow 0051 (TRBE disabled in guest
+context) - same Bug 473214797. Verified: strict git apply on the
+pin replica.
+
+Origin: android.googlesource.com/kernel/common 1aa7dd0e7d7becfe5d81b999ef2f69aba8c4d14c
+Batch: B-2 (P4 kvm/pKVM cluster) - Class B, RESHAPED for the pin; predicted ABI delta zero
+
+---
+diff --git a/arch/arm64/kvm/hyp/nvhe/debug-sr.c b/arch/arm64/kvm/hyp/nvhe/debug-sr.c
+index 0afff97ca..44a9c1521 100644
+--- a/arch/arm64/kvm/hyp/nvhe/debug-sr.c
++++ b/arch/arm64/kvm/hyp/nvhe/debug-sr.c
+@@ -122,12 +122,25 @@ static void __debug_restore_trace(u64 trfcr_el1, u64 trblimitr_el1)
+ void __debug_save_host_buffers_nvhe(struct kvm_vcpu *vcpu)
+ {
+ 	struct kvm_host_data *host_data = this_cpu_ptr(&kvm_host_data);
++	bool save_spe, save_trbe;
++
++	if (is_protected_kvm_enabled()) {
++		u64 dfr0 = read_sysreg(id_aa64dfr0_el1);
++
++		save_spe = FIELD_GET(ID_AA64DFR0_EL1_PMSVer, dfr0) &&
++				   !(read_sysreg_s(SYS_PMBIDR_EL1) & PMBIDR_EL1_P);
++		save_trbe = FIELD_GET(ID_AA64DFR0_EL1_TraceBuffer, dfr0) &&
++					  !(read_sysreg_s(SYS_TRBIDR_EL1) & TRBIDR_EL1_P);
++	} else {
++		save_spe = vcpu_get_flag(vcpu, DEBUG_STATE_SAVE_SPE);
++		save_trbe = vcpu_get_flag(vcpu, DEBUG_STATE_SAVE_TRBE);
++	}
+ 
+ 	/* Disable and flush SPE data generation */
+-	if (vcpu_get_flag(vcpu, DEBUG_STATE_SAVE_SPE))
++	if (save_spe)
+ 		__debug_save_spe(&vcpu->arch.host_debug_state.pmscr_el1);
+ 	/* Disable and flush Self-Hosted Trace generation */
+-	if (vcpu_get_flag(vcpu, DEBUG_STATE_SAVE_TRBE))
++	if (save_trbe)
+ 		__debug_save_trace(&vcpu->arch.host_debug_state.trfcr_el1,
+ 		                   &host_data->trblimitr_el1);
+ }
+@@ -140,10 +153,23 @@ void __debug_switch_to_guest(struct kvm_vcpu *vcpu)
+ void __debug_restore_host_buffers_nvhe(struct kvm_vcpu *vcpu)
+ {
+ 	struct kvm_host_data *host_data = this_cpu_ptr(&kvm_host_data);
++	bool restore_spe, restore_trbe;
++
++	if (is_protected_kvm_enabled()) {
++		u64 dfr0 = read_sysreg(id_aa64dfr0_el1);
++
++		restore_spe = FIELD_GET(ID_AA64DFR0_EL1_PMSVer, dfr0) &&
++				   !(read_sysreg_s(SYS_PMBIDR_EL1) & PMBIDR_EL1_P);
++		restore_trbe = FIELD_GET(ID_AA64DFR0_EL1_TraceBuffer, dfr0) &&
++					  !(read_sysreg_s(SYS_TRBIDR_EL1) & TRBIDR_EL1_P);
++	} else {
++		restore_spe = vcpu_get_flag(vcpu, DEBUG_STATE_SAVE_SPE);
++		restore_trbe = vcpu_get_flag(vcpu, DEBUG_STATE_SAVE_TRBE);
++	}
+ 
+-	if (vcpu_get_flag(vcpu, DEBUG_STATE_SAVE_SPE))
++	if (restore_spe)
+ 		__debug_restore_spe(vcpu->arch.host_debug_state.pmscr_el1);
+-	if (vcpu_get_flag(vcpu, DEBUG_STATE_SAVE_TRBE))
++	if (restore_trbe)
+ 		__debug_restore_trace(vcpu->arch.host_debug_state.trfcr_el1,
+ 		                      host_data->trblimitr_el1);
+ }
