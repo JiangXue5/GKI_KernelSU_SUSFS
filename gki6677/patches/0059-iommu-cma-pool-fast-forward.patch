@@ -1,0 +1,39 @@
+From: Vincent Donnefort <vdonnefort@google.com>
+Date: Fri Mar 7 14:58:46 2025 +0000
+Subject: [PATCH] ANDROID: KVM: arm64: Fix iommu CMA pool fast-forward
+
+When allocating pages from one of the CMA pool, we might store an
+out-of-bound value as the next pool to allocate from. Fix it.
+
+Bug: 383901011
+Bug: 277989609
+Bug: 278749606
+Fixes: 3f35c377b90d ("ANDROID: KVM: arm64: iommu: Allow donations from a CMA pool")
+Change-Id: I3ff021640d8a1140bfbbe65153bbb3667529409f
+Signed-off-by: Vincent Donnefort <vdonnefort@google.com>
+
+Origin: android.googlesource.com/kernel/common 6e4a686138484e3e9909820551900cab22d507c5
+Batch: B-2 (P4 kvm/pKVM cluster) - Class A, apply as-is; predicted ABI delta zero
+
+---
+diff --git a/arch/arm64/kvm/hyp/nvhe/iommu/iommu.c b/arch/arm64/kvm/hyp/nvhe/iommu/iommu.c
+index dbc1938..13a15b1 100644
+--- a/arch/arm64/kvm/hyp/nvhe/iommu/iommu.c
++++ b/arch/arm64/kvm/hyp/nvhe/iommu/iommu.c
+@@ -79,14 +79,14 @@ void *kvm_iommu_donate_pages(u8 order, bool request)
+ 
+ 	i = last_block_pool;
+ 	do {
+-		p = hyp_alloc_pages(&iommu_block_pools[i++], order);
++		p = hyp_alloc_pages(&iommu_block_pools[i], order);
+ 		if (p) {
+ 			last_block_pool = i;
+ 			hyp_spin_unlock(&__block_pools_lock);
+ 			return p;
+ 		}
+ 
+-		if (i >= MAX_BLOCK_POOLS)
++		if (++i >= MAX_BLOCK_POOLS)
+ 			i = 0;
+ 	} while (i != last_block_pool);
+ 
