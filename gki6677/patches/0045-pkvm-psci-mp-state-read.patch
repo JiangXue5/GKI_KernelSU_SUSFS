@@ -1,0 +1,67 @@
+From: Fuad Tabba <tabba@google.com>
+Date: Thu Jul 16 17:01:17 2026 +0100
+Subject: [PATCH] ANDROID: KVM: arm64: Fix mp_state read in pkvm_vcpu_init_psci()
+
+The 2026-04 pick of "Remove MP state tracking from EL2" is the
+android14-6.1 variant and lacks the android15-6.6 hunks that pass the
+host-requested mp_state into pkvm_vcpu_init_psci(). The field the
+function still reads is no longer written anywhere and always reads 0
+(KVM_MP_STATE_RUNNABLE), so every vCPU of a pvmfw VM takes the RUNNABLE
+path: the second fails to claim the primary slot, and the WARN_ON()
+around the call panics the hypervisor. Any pvmfw VM with more than one
+vCPU crashes the device on its first run.
+
+Pass mp_state from init_pkvm_hyp_vcpu() as android15-6.6 does.
+
+Fixes: 6d7738d210628 ("ANDROID: KVM: arm64: Remove MP state tracking from EL2")
+Bug: 534667741
+Change-Id: Icb9215eca831f7c574e51135c925130dc8d3f7ab
+Signed-off-by: Fuad Tabba <tabba@google.com>
+(cherry picked from commit c300c987659ff7139a73b048c428001e25044367)
+Signed-off-by: Lee Jones <joneslee@google.com>
+
+[gki6677 reshape note - 2026-11-02, Z.ai]
+Reshaped for the 6.6.77 pin: hunks 1-2 (signature + mp_state source)
+apply verbatim; the call-site hunk re-anchors on the pin's older
+error-path form (ret = pkvm_vcpu_init_psci(...) followed by goto
+done, not upstream's WARN_ON one-liner); upstream's 4th hunk
+(blank-line removal inside pvm_psci_vcpu_off(), a region
+restructured by later commits relative to the pin) is cosmetic and
+dropped. Semantics at the pin are unchanged - init_pkvm_hyp_vcpu()
+already holds the race-free host mp_state local (pkvm.c:706/730)
+that this fix threads through, so the change ships for
+upstream-shape consistency and future backport-drift reduction.
+Verified: strict git apply on the pin replica.
+
+Origin: android.googlesource.com/kernel/common 06cf7e02a104e882bc3f439b8b573b97e810afdc
+Batch: B-2 (P4 kvm/pKVM cluster) - Class B, RESHAPED for the pin; predicted ABI delta zero
+
+---
+diff --git a/arch/arm64/kvm/hyp/nvhe/pkvm.c b/arch/arm64/kvm/hyp/nvhe/pkvm.c
+index f7ed70d64..f9227d070 100644
+--- a/arch/arm64/kvm/hyp/nvhe/pkvm.c
++++ b/arch/arm64/kvm/hyp/nvhe/pkvm.c
+@@ -558,12 +558,12 @@ static int pkvm_vcpu_init_ptrauth(struct pkvm_hyp_vcpu *hyp_vcpu)
+ 	return ret;
+ }
+ 
+-static int pkvm_vcpu_init_psci(struct pkvm_hyp_vcpu *hyp_vcpu)
++static int pkvm_vcpu_init_psci(struct pkvm_hyp_vcpu *hyp_vcpu, u32 mp_state)
+ {
+ 	struct vcpu_reset_state *reset_state = &hyp_vcpu->vcpu.arch.reset_state;
+ 	struct pkvm_hyp_vm *hyp_vm = pkvm_hyp_vcpu_to_hyp_vm(hyp_vcpu);
+ 
+-	if (hyp_vcpu->vcpu.arch.mp_state.mp_state == KVM_MP_STATE_STOPPED) {
++	if (mp_state == KVM_MP_STATE_STOPPED) {
+ 		reset_state->reset = false;
+ 		hyp_vcpu->power_state = PSCI_0_2_AFFINITY_LEVEL_OFF;
+ 	} else if (pkvm_hyp_vm_has_pvmfw(hyp_vm)) {
+@@ -751,7 +751,7 @@ static int init_pkvm_hyp_vcpu(struct pkvm_hyp_vcpu *hyp_vcpu,
+ 	if (ret)
+ 		goto done;
+ 
+-	ret = pkvm_vcpu_init_psci(hyp_vcpu);
++		ret = pkvm_vcpu_init_psci(hyp_vcpu, mp_state);
+ 	if (ret)
+ 		goto done;
+ 
