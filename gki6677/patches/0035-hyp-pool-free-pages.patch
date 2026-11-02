@@ -1,0 +1,46 @@
+From: Quentin Perret <qperret@google.com>
+Date: Thu Jan 30 18:26:33 2025 +0000
+Subject: [PATCH] ANDROID: KVM: arm64: Fix hyp_pool::free_pages
+
+We currently update the hyp_pool's free_pages member after having
+attached the page on the put_page() path. However, whenever a page gets
+coallesced as a tail page with its buddy, its order is set to
+HYP_NO_ORDER  -- only the head page has the order member set to the true
+value -- hence leading to a buggy accounting of the free pages.
+
+Do the free_page calculation prior to attaching the page to fix this.
+While at it, make sure to use ULL consistently when working with
+free_pages as it is defined as a u64.
+
+Bug: 357781595
+Change-Id: Id29dbfe3b7132b1259b1a7d1e115fb6e1cb4af12
+Signed-off-by: Quentin Perret <qperret@google.com>
+(cherry picked from commit b548789a67881d38a2405b19ba4a4c3696bc36d3)
+
+Origin: android.googlesource.com/kernel/common dfa29d0772b5914c6912c63c452bf63e00c59355
+Batch: B-2 (P4 kvm/pKVM cluster) - Class A, apply as-is; predicted ABI delta zero
+
+---
+diff --git a/arch/arm64/kvm/hyp/nvhe/page_alloc.c b/arch/arm64/kvm/hyp/nvhe/page_alloc.c
+index e962cfa..a4b3790 100644
+--- a/arch/arm64/kvm/hyp/nvhe/page_alloc.c
++++ b/arch/arm64/kvm/hyp/nvhe/page_alloc.c
+@@ -161,8 +161,8 @@ static void __hyp_put_page(struct hyp_pool *pool, struct hyp_page *p)
+ 
+ 	if (hyp_page_ref_dec_and_test(p)) {
+ 		hyp_spin_lock(&pool->lock);
++		free_pages = pool->free_pages + (1ULL << p->order);
+ 		__hyp_attach_page(pool, p);
+-		free_pages = pool->free_pages + (1 << p->order);
+ 		WRITE_ONCE(pool->free_pages, free_pages);
+ 		hyp_spin_unlock(&pool->lock);
+ 	}
+@@ -219,7 +219,7 @@ void *hyp_alloc_pages(struct hyp_pool *pool, u8 order)
+ 
+ 	hyp_set_page_refcounted(p);
+ 
+-	free_pages = pool->free_pages - (1 << p->order);
++	free_pages = pool->free_pages - (1ULL << p->order);
+ 	WRITE_ONCE(pool->free_pages, free_pages);
+ 	hyp_spin_unlock(&pool->lock);
+ 
