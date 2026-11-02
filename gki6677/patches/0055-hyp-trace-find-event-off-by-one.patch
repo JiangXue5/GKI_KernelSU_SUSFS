@@ -1,0 +1,91 @@
+From: Nikita Ioffe <ioffe@google.com>
+Date: Fri Jul 18 13:06:06 2025 +0000
+Subject: [PATCH] ANDROID: KVM: arm64: fix off-by-one error in hyp_trace_find_event
+
+Hypervisor tracing expects 1:1 mapping between tracing events exposed
+under /sys/kernel/tracing/hyp/events and their representation in the
+hypervisor. Previously this was done by simply using the same id,
+however it broke some userspace tracing tools (e.g. Perfetto) that rely
+on the fact that event IDs are positive integers.
+
+Patch e5782bee1e84332 (ANDROID: kvm: arm64: start hypervisor event IDs
+from 1) attempted to fix the issue, but an off-by-one bug in the
+hyp_trace_find_event function which relies on the fact that event ID is
+equal to the position of the event relative to the __hyp_events_start.
+
+This patch attempts to properly fix the bug by iterating over all the
+known events and finding the one that has the requested ID. This changes
+the complexity of the hyp_trace_find_event function from O(|number of
+EL2 modules|) to O(|number of registered events|), however since there
+are less than 10 hypervisor events the change shouldn't introduce any
+impact on hypervisor tracing performance.
+
+Bug: 428904926
+Test: presubmit
+Test: boot qemu check tracing works
+Change-Id: I14426a584980911fc1a3ffc2d0ab6e2141c4fa77
+Signed-off-by: Nikita Ioffe <ioffe@google.com>
+
+Origin: android.googlesource.com/kernel/common cb0140ecb461dc53818b5212b5f27b60619f11cd
+Batch: B-2 (P4 kvm/pKVM cluster) - Class A, apply as-is; predicted ABI delta zero
+
+---
+diff --git a/arch/arm64/kvm/hyp_events.c b/arch/arm64/kvm/hyp_events.c
+index 086931b..66ae6c6 100644
+--- a/arch/arm64/kvm/hyp_events.c
++++ b/arch/arm64/kvm/hyp_events.c
+@@ -269,30 +269,36 @@ static struct hyp_event_mod_tables {
+ 
+ struct hyp_event *hyp_trace_find_event(int id)
+ {
+-	struct hyp_event *event = __hyp_events_start + id;
++	struct hyp_event *event;
++	struct hyp_event_table *table;
++	int i, j;
+ 
+-	if ((unsigned long)event >= (unsigned long)__hyp_events_end) {
+-		struct hyp_event_table *table;
+-
+-		event = NULL;
+-		id -= nr_events(__hyp_events_start, __hyp_events_end);
+-
+-		rcu_read_lock();
+-		table = rcu_dereference(mod_event_tables.tables);
++	for (event = __hyp_events_start; event < __hyp_events_end; event++) {
++		if (event->id == id)
++			return event;
++		if (event->id > id)
++			return NULL;
++	}
+ 
+-		for (int i = 0; i < mod_event_tables.nr_tables; i++) {
+-			if (table->nr_events <= id) {
+-				id -= table->nr_events;
+-				table++;
+-				continue;
++	event = NULL;
++	rcu_read_lock();
++	table = rcu_dereference(mod_event_tables.tables);
++	for (i = 0; i < mod_event_tables.nr_tables; i++, table++) {
++		event = table->start;
++		for (j = 0; j < table->nr_events; j++, event++) {
++			if (event->id == id)
++				goto end;
++			if (event->id > id) {
++				event = NULL;
++				goto end;
+ 			}
+-
+-			event = table->start + id;
+-			break;
+ 		}
+-		rcu_read_unlock();
++		event = NULL;
+ 	}
+ 
++end:
++	rcu_read_unlock();
++
+ 	return event;
+ }
+ 
