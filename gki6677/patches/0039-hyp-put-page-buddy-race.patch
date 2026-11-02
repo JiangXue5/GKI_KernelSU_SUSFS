@@ -1,0 +1,68 @@
+From: Keir Fraser <keirf@google.com>
+Date: Thu Apr 23 14:12:51 2026 +0000
+Subject: [PATCH] ANDROID: kvm: arm64: Fix buddy race in __hyp_put_page()
+
+__hyp_put_page() decrements the page refcount to zero before taking
+the pool lock and initialising the allocator's list_head. This races with
+the buddy page also being freed, and looking for its free buddy.
+
+Fix this by proactively taking the pool lock if we will decrement the
+refcount to zero. This requires us to replace a fetch-and-add with
+a cmpxchg loop.
+
+Bug: 495629978
+Change-Id: Ie307ec27de86777109c6e2d53835b128a729e460
+Signed-off-by: Keir Fraser <keirf@google.com>
+
+[gki6677 reshape note - 2026-11-02, Z.ai]
+Reshaped for the 6.6.77 pin: upstream's post-state accounts free_pages
+via update_free_pages() (which also tracks pool->min_free_pages);
+that helper and the min_free_pages field are introduced by an
+intermediate allocator commit between the shipped earliest twin of
+"Fix hyp_pool::free_pages" (our 0035) and this fix, and the field
+does not exist at the pin (struct hyp_pool untouched - KMI-safe).
+The race fix itself (cmpxchg_relaxed refcount loop + acquiring the
+pool lock before the refcount reaches zero) is shipped verbatim;
+the free_pages accounting keeps the pin's existing
+WRITE_ONCE(pool->free_pages, ...) form with 0035's (1ULL << order)
+correction. Verified: strict git apply on the pin replica.
+
+Origin: android.googlesource.com/kernel/common d40232a360ca352e53a3f97fcd0efd6efbecee8b
+Batch: B-2 (P4 kvm/pKVM cluster) - Class B, RESHAPED for the pin; predicted ABI delta zero
+
+---
+diff --git a/arch/arm64/kvm/hyp/nvhe/page_alloc.c b/arch/arm64/kvm/hyp/nvhe/page_alloc.c
+index a4b3790cb..9ac34fb6b 100644
+--- a/arch/arm64/kvm/hyp/nvhe/page_alloc.c
++++ b/arch/arm64/kvm/hyp/nvhe/page_alloc.c
+@@ -158,9 +158,28 @@ static struct hyp_page *__hyp_extract_page(struct hyp_pool *pool,
+ static void __hyp_put_page(struct hyp_pool *pool, struct hyp_page *p)
+ {
+ 	u64 free_pages;
++	u16 seen_refcount, old_refcount;
++
++	for (old_refcount = READ_ONCE(p->refcount); ; old_refcount = seen_refcount) {
++		WARN_ON(old_refcount == 0);
++		if (old_refcount == 1) {
++			/*
++			 * Acquire the pool lock before we drop the refcount to
++			 * zero, thus avoiding a race with __find_buddy_avail()
++			 * finding us before we initialise our in-page
++			 * list_head.
++			 */
++			hyp_spin_lock(&pool->lock);
++		}
++		seen_refcount = cmpxchg_relaxed(
++			&p->refcount, old_refcount, old_refcount-1);
++		if (seen_refcount == old_refcount)
++			break;
++		if (old_refcount == 1)
++			hyp_spin_unlock(&pool->lock);
++	}
+ 
+-	if (hyp_page_ref_dec_and_test(p)) {
+-		hyp_spin_lock(&pool->lock);
++	if (old_refcount == 1) {
+ 		free_pages = pool->free_pages + (1ULL << p->order);
+ 		__hyp_attach_page(pool, p);
+ 		WRITE_ONCE(pool->free_pages, free_pages);
