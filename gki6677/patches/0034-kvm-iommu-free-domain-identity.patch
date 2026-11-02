@@ -1,0 +1,35 @@
+From: Daniel Mentz <danielmentz@google.com>
+Date: Fri Sep 11 19:39:48 2026 +0000
+Subject: [PATCH] ANDROID: KVM: arm64: iommu: Reject identity domain in kvm_iommu_free_domain
+
+The identity mapping domain is a special hypervisor-internal domain that
+mirrors the host stage-2 page tables and is intended to live for the
+lifetime of the hypervisor.
+
+Reject any attempt to free KVM_IOMMU_DOMAIN_IDMAP_ID in
+kvm_iommu_free_domain().
+
+Fixes: 1a45ce72b0cf ("ANDROID: KVM: iommu: Restrict access KVM_IOMMU_DOMAIN_IDMAP_ID")
+Bug: 527169856
+Assisted-by: Antigravity:gemini
+Change-Id: I890141c746b7d0711eafda772d91f8576bf75c79
+Signed-off-by: Daniel Mentz <danielmentz@google.com>
+
+Origin: android.googlesource.com/kernel/common d4e462b6d55717be29fb2fadb2c40eefd18f3d5a
+Batch: B-2 (P4 kvm/pKVM cluster) - Class A, apply as-is; predicted ABI delta zero
+
+---
+diff --git a/arch/arm64/kvm/hyp/nvhe/iommu/iommu.c b/arch/arm64/kvm/hyp/nvhe/iommu/iommu.c
+index 1372848..84d4123 100644
+--- a/arch/arm64/kvm/hyp/nvhe/iommu/iommu.c
++++ b/arch/arm64/kvm/hyp/nvhe/iommu/iommu.c
+@@ -411,6 +411,9 @@ int kvm_iommu_free_domain(pkvm_handle_t domain_id)
+ 	int ret = 0;
+ 	struct kvm_hyp_iommu_domain *domain;
+ 
++	if (domain_id == KVM_IOMMU_DOMAIN_IDMAP_ID)
++		return -EINVAL;
++
+ 	domain = handle_to_domain(domain_id);
+ 	if (!domain)
+ 		return -EINVAL;
