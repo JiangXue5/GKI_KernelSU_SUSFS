@@ -1,0 +1,110 @@
+From: Quentin Perret <qperret@google.com>
+Date: Fri Jan 31 15:01:39 2025 +0000
+Subject: [PATCH] ANDROID: KVM: arm64: Handle hyp s1 allocation failures gracefully
+
+Now that we have removed several indirection layers in the mem_protect
+machinery, it becomes a little simpler to handle allocation failures
+gracefully. Use this opportunity to handle hyp stage-1 mapping failures
+without BUG-ing, hence paving the way for reducing its associated
+carveout.
+
+[@vdonnefort: Rework for the pre-6.12 mem_protect machinery]
+
+Bug: 273700914
+Bug: 239674049
+Suggested-by: Vincent Donnefort <vdonnefort@google.com>
+Change-Id: Ib8b27e59903f3223eaf82a915fe45ba4bcf976ba
+Signed-off-by: Quentin Perret <qperret@google.com>
+
+Origin: android.googlesource.com/kernel/common 18741a35453ea7ea7997f8513483e7d5c6a16612
+Batch: B-2 (P4 kvm/pKVM cluster) - Class A, apply as-is; predicted ABI delta zero
+
+---
+diff --git a/arch/arm64/kvm/hyp/nvhe/mem_protect.c b/arch/arm64/kvm/hyp/nvhe/mem_protect.c
+index 8921d39..8491a14 100644
+--- a/arch/arm64/kvm/hyp/nvhe/mem_protect.c
++++ b/arch/arm64/kvm/hyp/nvhe/mem_protect.c
+@@ -1742,6 +1742,11 @@ static int __do_share(struct pkvm_mem_transition *tx,
+ 		break;
+ 	case PKVM_ID_HYP:
+ 		ret = hyp_complete_share(checked_tx, tx->completer.prot);
++		if (ret == -ENOMEM) {
++			WARN_ON(tx->initiator.id != PKVM_ID_HOST);
++			WARN_ON(host_initiate_unshare(checked_tx));
++			return ret;
++		}
+ 		break;
+ 	case PKVM_ID_FFA:
+ 		/*
+@@ -1757,7 +1762,7 @@ static int __do_share(struct pkvm_mem_transition *tx,
+ 		ret = -EINVAL;
+ 	}
+ 
+-	return ret;
++	return WARN_ON(ret);
+ }
+ 
+ /*
+@@ -1783,7 +1788,7 @@ static int do_share(struct pkvm_mem_transition *share,
+ 		return ret;
+ 
+ 	ret = __do_share(share, &checked_tx);
+-	if (WARN_ON(ret))
++	if (ret)
+ 		return ret;
+ 
+ 	*nr_shared = checked_tx.nr_pages;
+@@ -1966,6 +1971,16 @@ static int __do_donate(struct pkvm_mem_transition *tx)
+ 		break;
+ 	case PKVM_ID_HYP:
+ 		ret = hyp_complete_donation(completer_addr, tx);
++		if (ret == -ENOMEM) {
++			struct pkvm_mem_transition abort = {
++				.nr_pages = tx->nr_pages,
++				.completer.id = PKVM_ID_HOST,
++			};
++
++			WARN_ON(tx->initiator.id != PKVM_ID_HOST);
++			WARN_ON(host_complete_donation(completer_addr, &abort));
++			return -ENOMEM;
++		}
+ 		break;
+ 	case PKVM_ID_GUEST:
+ 		ret = guest_complete_donation(completer_addr, tx);
+@@ -1974,7 +1989,7 @@ static int __do_donate(struct pkvm_mem_transition *tx)
+ 		ret = -EINVAL;
+ 	}
+ 
+-	return ret;
++	return WARN_ON(ret);
+ }
+ 
+ /*
+@@ -1994,7 +2009,7 @@ static int do_donate(struct pkvm_mem_transition *donation)
+ 	if (ret)
+ 		return ret;
+ 
+-	return WARN_ON(__do_donate(donation));
++	return __do_donate(donation);
+ }
+ 
+ int __pkvm_host_share_hyp(u64 pfn)
+diff --git a/arch/arm64/kvm/hyp/nvhe/mm.c b/arch/arm64/kvm/hyp/nvhe/mm.c
+index e78f42a..4640883 100644
+--- a/arch/arm64/kvm/hyp/nvhe/mm.c
++++ b/arch/arm64/kvm/hyp/nvhe/mm.c
+@@ -113,7 +113,13 @@ int __pkvm_create_private_mapping(phys_addr_t phys, size_t size,
+ 
+ int __hyp_allocator_map(unsigned long va, phys_addr_t phys)
+ {
+-	return __pkvm_create_mappings(va, PAGE_SIZE, phys, PAGE_HYP);
++	int ret = __pkvm_create_mappings(va, PAGE_SIZE, phys, PAGE_HYP);
++
++	/* Let's not confuse the hyp_alloc callers who will try to top-up pointlessly on -ENOMEM */
++	if (ret == -ENOMEM)
++		ret = -EBUSY;
++
++	return ret;
+ }
+ 
+ #ifdef CONFIG_NVHE_EL2_DEBUG
