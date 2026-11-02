@@ -1,0 +1,35 @@
+From: Vincent Donnefort <vdonnefort@google.com>
+Date: Wed Jun 11 17:38:59 2025 +0100
+Subject: [PATCH] ANDROID: KVM: arm64: Fix hyp_alloc(0)
+
+As the name suggests, MIN_ALLOC is the minimum allocation. Make sure
+that hyp_alloc(0) always uses that value. Without this, the newly
+allocated chunk would look like it is free (alloc_size == 0), so the
+allocator would be able to merge or recycle it.
+
+Bug: 424172976
+Bug: 273748186
+Fixes: 08477328e7ae ("ANDROID: KVM: arm64: Add a heap allocator for the pKVM hyp")
+Reported-by: Hiroyuki Katsura <hk590@cam.ac.uk>
+Signed-off-by: Vincent Donnefort <vdonnefort@google.com>
+(cherry picked from https://android-review.googlesource.com/q/commit:e6f1cbbab1843a62714bf19329cbabf43adbd297)
+Merged-In: Ia873c8d075025a9aa759057f46c7c8fe8ce20fb8
+Change-Id: Ia873c8d075025a9aa759057f46c7c8fe8ce20fb8
+
+Origin: android.googlesource.com/kernel/common 3148030c78fb8af1f5ea644cf11a2810955596d3
+Batch: B-2 (P4 kvm/pKVM cluster) - Class A, apply as-is; predicted ABI delta zero
+
+---
+diff --git a/arch/arm64/kvm/hyp/nvhe/alloc.c b/arch/arm64/kvm/hyp/nvhe/alloc.c
+index dc1a737..13f7778 100644
+--- a/arch/arm64/kvm/hyp/nvhe/alloc.c
++++ b/arch/arm64/kvm/hyp/nvhe/alloc.c
+@@ -556,7 +556,7 @@ void *hyp_alloc(size_t size)
+ 	unsigned long chunk_addr;
+ 	int missing_map, ret = 0;
+ 
+-	size = ALIGN(size, MIN_ALLOC);
++	size = ALIGN(size ?: MIN_ALLOC, MIN_ALLOC);
+ 
+ 	hyp_spin_lock(&allocator->lock);
+ 
