@@ -1,0 +1,35 @@
+From: Fuad Tabba <tabba@google.com>
+Date: Tue Jun 23 17:37:01 2026 +0100
+Subject: [PATCH] ANDROID: KVM: arm64: Fix free mismatch in alloc_sve_state()
+
+alloc_sve_state() allocates with alloc_pages_exact() but frees with
+kfree() on the kvm_share_hyp() error path. kfree() on
+alloc_pages_exact() memory is wrong because alloc_pages_exact() calls
+split_page() to yield order-0 pages, so kfree() frees only the head
+page and leaks the rest. The destroy path in kvm_arm_vcpu_destroy()
+already uses free_pages_exact() correctly.
+
+Use free_pages_exact() in the error path to match the allocator.
+
+Fixes: 9251f19da0f66 ("ANDROID: KVM: arm64: Donate the memory for the guest SVE state for protected VMs")
+Bug: 458241298
+Change-Id: Ic7672178f9913a6e06263106111c5c9b70eb45cc
+Signed-off-by: Fuad Tabba <tabba@google.com>
+
+Origin: android.googlesource.com/kernel/common aa4a96722c643dc7f9e114d95e1e1e8056f87670
+Batch: B-2 (P4 kvm/pKVM cluster) - Class A, apply as-is; predicted ABI delta zero
+
+---
+diff --git a/arch/arm64/kvm/reset.c b/arch/arm64/kvm/reset.c
+index 059b703..6b9a207 100644
+--- a/arch/arm64/kvm/reset.c
++++ b/arch/arm64/kvm/reset.c
+@@ -96,7 +96,7 @@ static int alloc_sve_state(struct kvm_vcpu *vcpu)
+ 
+ 	ret = kvm_share_hyp(buf, buf + reg_sz);
+ 	if (ret) {
+-		kfree(buf);
++		free_pages_exact(buf, reg_sz);
+ 		return ret;
+ 	}
+ 
