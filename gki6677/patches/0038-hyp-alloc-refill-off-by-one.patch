@@ -1,0 +1,31 @@
+From: Vincent Donnefort <vdonnefort@google.com>
+Date: Fri May 8 16:02:16 2026 +0100
+Subject: [PATCH] ANDROID: KVM: arm64: Fix off-by-one bounds check in hyp_alloc_mgt_refill()
+
+The hyp_alloc_mgt_refill() id argument shouldn't exceed MAX_ALLOC_ID -
+1. Even though this isn't a security issue, thanks to
+array_index_nospec() clamping the id value, fix the check to ensure
+id == MAX_ALLOC_ID is correctly rejected.
+
+Bug: 508561046
+Reported-by: Hiroyuki Katsura <hk590@cam.ac.uk>
+Change-Id: Iaa4725c05ff88f9adc7262d472990640acd872ea
+Signed-off-by: Vincent Donnefort <vdonnefort@google.com>
+
+Origin: android.googlesource.com/kernel/common 866d2f24c0e820127b2f34b84c7b655d05a75a08
+Batch: B-2 (P4 kvm/pKVM cluster) - Class A, apply as-is; predicted ABI delta zero
+
+---
+diff --git a/arch/arm64/kvm/hyp/nvhe/alloc_mgt.c b/arch/arm64/kvm/hyp/nvhe/alloc_mgt.c
+index cfd903b..c48ec2d 100644
+--- a/arch/arm64/kvm/hyp/nvhe/alloc_mgt.c
++++ b/arch/arm64/kvm/hyp/nvhe/alloc_mgt.c
+@@ -20,7 +20,7 @@ int hyp_alloc_mgt_refill(unsigned long id, struct kvm_hyp_memcache *host_mc)
+ {
+ 	struct hyp_mgt_allocator_ops *ops;
+ 
+-	if (id > MAX_ALLOC_ID)
++	if (id >= MAX_ALLOC_ID)
+ 		return -EINVAL;
+ 
+ 	id = array_index_nospec(id, MAX_ALLOC_ID);
