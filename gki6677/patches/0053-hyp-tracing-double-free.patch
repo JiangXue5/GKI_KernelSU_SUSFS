@@ -1,0 +1,36 @@
+From: Vincent Donnefort <vdonnefort@google.com>
+Date: Thu May 7 07:32:16 2026 +0100
+Subject: [PATCH] ANDROID: KVM: arm64: Fix double free on hyp tracing error path
+
+During hyp tracing init, if the pinning of the meta-page fails for a
+ring-buffer, that ring-buffer will still appear as loaded because the
+bpages member will still be set. This leads to a double free on the
+error path.
+
+Ensure bpages is NULL when freed so any subsequent call to teardown
+observes the ring-buffer as unloaded and does not attempt to do
+anything.
+
+Bug: 509943385
+Reported-by: Hiroyuki Katsura <hk590@cam.ac.uk>
+Signed-off-by: Vincent Donnefort <vdonnefort@google.com>
+Cherrypick-From: https://android-review.googlesource.com/q/commit:ef3b28c9c5ed91ff67c013e0fbade9c6390bd7b3
+Merged-In: Ife7269b2cad51f1df4dd8b0c761da51ae67a3a14
+Change-Id: Ife7269b2cad51f1df4dd8b0c761da51ae67a3a14
+
+Origin: android.googlesource.com/kernel/common e0008b6471f5125cac1aa1332f1ed84360aa8446
+Batch: B-2 (P4 kvm/pKVM cluster) - Class A, apply as-is; predicted ABI delta zero
+
+---
+diff --git a/arch/arm64/kvm/hyp/nvhe/trace.c b/arch/arm64/kvm/hyp/nvhe/trace.c
+index a08b912..bdce9ea 100644
+--- a/arch/arm64/kvm/hyp/nvhe/trace.c
++++ b/arch/arm64/kvm/hyp/nvhe/trace.c
+@@ -378,6 +378,7 @@ static int rb_cpu_init(struct rb_page_desc *pdesc, struct hyp_rb_per_cpu *cpu_bu
+ 				 ((void *)cpu_buffer->meta) + PAGE_SIZE);
+ 	if (ret) {
+ 		hyp_free(cpu_buffer->bpages);
++		cpu_buffer->bpages = NULL;
+ 		return ret;
+ 	}
+ 
