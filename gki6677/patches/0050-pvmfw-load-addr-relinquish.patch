@@ -1,0 +1,75 @@
+From: Fuad Tabba <tabba@google.com>
+Date: Wed Sep 2 15:18:28 2026 +0100
+Subject: [PATCH] ANDROID: KVM: arm64: Don't invalidate pvmfw_load_addr on guest relinquish
+
+pkvm_vcpu_init_psci() reads "this VM boots via pvmfw" off
+pvmfw_load_addr, which __pkvm_guest_relinquish_to_host() clears once
+the guest returns a page in the pvmfw range. A later __pkvm_init_vcpu()
+on such a VM then takes {pc, r0} from the host-shared kvm_vcpu: a
+host-chosen entry point inside an attested pVM.
+
+The clear only stops pvmfw being copied into the range again. Track
+that in its own flag and leave pvmfw_load_addr as set at creation, so
+it keeps meaning "pvmfw VM" for every reader.
+
+Fixes: cac44a0bcfc5 ("ANDROID: KVM: arm64: Don't copy pvmfw pages more than once")
+Bug: 548558231
+Bug: 556591763
+Change-Id: Ie46fc396b3fe3ab7a4bd23a3c70e11e722d8bc16
+Signed-off-by: Fuad Tabba <tabba@google.com>
+
+[gki6677 reshape note - 2026-11-02, Z.ai]
+Reshaped for the 6.6.77 pin: the new bool lands in the pin's
+struct pkvm_hyp_vm next to pvmfw_entry_vcpu (upstream's insertion
+point names primary_vcpu - that field was renamed by a later commit
+the pin does not carry); the guard hunk (pkvm_ipa_range_has_pvmfw)
+and the relinquish-site hunk apply verbatim. The struct is
+nvhe-internal (hyp visibility only) - not module-visible, KMI/ABI
+unaffected (as triaged). Semantics identical: relinquish marks the
+flag instead of invalidating pvmfw_load_addr, and the range check
+excludes the vm once relinquished. Verified: strict git apply on
+the pin replica.
+
+Origin: android.googlesource.com/kernel/common e73eb9778f458b79a6210f36a0b983f4b68fc552
+Batch: B-2 (P4 kvm/pKVM cluster) - Class B, RESHAPED for the pin; predicted ABI delta zero
+
+---
+diff --git a/arch/arm64/kvm/hyp/include/nvhe/pkvm.h b/arch/arm64/kvm/hyp/include/nvhe/pkvm.h
+index 5f456a822..06e328f4f 100644
+--- a/arch/arm64/kvm/hyp/include/nvhe/pkvm.h
++++ b/arch/arm64/kvm/hyp/include/nvhe/pkvm.h
+@@ -59,6 +59,12 @@ struct pkvm_hyp_vm {
+ 	/* Primary vCPU pending entry to the pvmfw */
+ 	struct pkvm_hyp_vcpu *pvmfw_entry_vcpu;
+ 
++	/*
++	 * Set once the guest relinquishes a page in the pvmfw range: pvmfw
++	 * is never copied into that range again.
++	 */
++	bool pvmfw_relinquished;
++
+ 	unsigned short refcount;
+ 
+ 	/*
+@@ -153,7 +159,7 @@ static inline bool pkvm_ipa_range_has_pvmfw(struct pkvm_hyp_vm *vm,
+ 	struct kvm_protected_vm *pkvm = &vm->kvm.arch.pkvm;
+ 	u64 pvmfw_load_end = pkvm->pvmfw_load_addr + pvmfw_size;
+ 
+-	if (!pkvm_hyp_vm_has_pvmfw(vm))
++	if (!pkvm_hyp_vm_has_pvmfw(vm) || vm->pvmfw_relinquished)
+ 		return false;
+ 
+ 	return ipa_end > pkvm->pvmfw_load_addr && ipa_start < pvmfw_load_end;
+diff --git a/arch/arm64/kvm/hyp/nvhe/mem_protect.c b/arch/arm64/kvm/hyp/nvhe/mem_protect.c
+index 226d0bb00..3f72ca9a6 100644
+--- a/arch/arm64/kvm/hyp/nvhe/mem_protect.c
++++ b/arch/arm64/kvm/hyp/nvhe/mem_protect.c
+@@ -448,7 +448,7 @@ int __pkvm_guest_relinquish_to_host(struct pkvm_hyp_vcpu *vcpu,
+ 	WARN_ON(host_stage2_set_owner_locked(data.pa, PAGE_SIZE, PKVM_ID_HOST));
+ 
+ 	if (pkvm_ipa_range_has_pvmfw(vm, ipa, ipa + PAGE_SIZE))
+-		vm->kvm.arch.pkvm.pvmfw_load_addr = PVMFW_INVALID_LOAD_ADDR;
++		vm->pvmfw_relinquished = true;
+ 
+ end:
+ 	guest_unlock_component(vm);
