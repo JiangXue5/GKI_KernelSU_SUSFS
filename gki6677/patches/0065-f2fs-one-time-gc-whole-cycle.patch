@@ -1,0 +1,88 @@
+From: Daeho Jeong <daehojeong@google.com>
+Date: Fri, 3 Oct 2025 15:43:08 -0700
+Subject: [PATCH] BACKPORT: FROMGIT: f2fs: maintain one time GC mode is enabled
+ during whole zoned GC cycle
+
+The current version missed setting one time GC for normal zoned GC
+cycle. So, valid threshold control is not working. Need to fix it to
+prevent excessive GC for zoned devices.
+
+Fixes: e791d00bd06c ("f2fs: add valid block ratio not to do excessive GC for one time GC")
+Signed-off-by: Daeho Jeong <daehojeong@google.com>
+Reviewed-by: Chao Yu <chao@kernel.org>
+Signed-off-by: Jaegeuk Kim <jaegeuk@kernel.org>
+(cherry picked from commit 5d431cc8759bd62ccdb45f196317ea6e93b83fee https://git.kernel.org/pub/scm/linux/kernel/git/jaegeuk/f2fs.git dev)
+Link: https://lore.kernel.org/linux-f2fs-devel/20251003224308.1948874-1-daeho43@gmail.com
+
+Bug: 438700991
+Bug: 452921822
+Change-Id: I50dbfcd1b756a45118da7a0164a35ad37ca3f90f
+Signed-off-by: Daeho Jeong <daehojeong@google.com>
+(cherry picked from commit d26012b0b886245126bcaa9b01519a93bec2b7c0)
+
+Origin: android.googlesource.com/kernel/common 6d71ac405e1cc50262ea171e6675dbe2d44359f9
+Batch: B-3a (P4 pre-window sweep 2025-04..2026-01) - Class A, apply as-is; predicted ABI delta zero
+
+---
+diff --git a/fs/f2fs/gc.c b/fs/f2fs/gc.c
+index 0c3b379d2..e6139575e 100644
+--- a/fs/f2fs/gc.c
++++ b/fs/f2fs/gc.c
+@@ -41,13 +41,14 @@ static int gc_thread_func(void *data)
+ 	struct f2fs_gc_control gc_control = {
+ 		.victim_segno = NULL_SEGNO,
+ 		.should_migrate_blocks = false,
+-		.err_gc_skipped = false };
++		.err_gc_skipped = false,
++		.one_time = false };
+ 
+ 	wait_ms = gc_th->min_sleep_time;
+ 
+ 	set_freezable();
+ 	do {
+-		bool sync_mode, foreground = false;
++		bool sync_mode, foreground = false, gc_boost = false;
+ 
+ 		wait_event_freezable_timeout(*wq,
+ 				kthread_should_stop() ||
+@@ -55,8 +56,12 @@ static int gc_thread_func(void *data)
+ 				gc_th->gc_wake,
+ 				msecs_to_jiffies(wait_ms));
+ 
+-		if (test_opt(sbi, GC_MERGE) && waitqueue_active(fggc_wq))
++		if (test_opt(sbi, GC_MERGE) && waitqueue_active(fggc_wq)) {
+ 			foreground = true;
++			gc_control.one_time = false;
++		} else if (f2fs_sb_has_blkzoned(sbi)) {
++			gc_control.one_time = true;
++		}
+ 
+ 		/* give it a try one time */
+ 		if (gc_th->gc_wake)
+@@ -84,8 +89,6 @@ static int gc_thread_func(void *data)
+ 			continue;
+ 		}
+ 
+-		gc_control.one_time = false;
+-
+ 		/*
+ 		 * [GC triggering condition]
+ 		 * 0. GC is not conducted currently.
+@@ -135,7 +138,7 @@ static int gc_thread_func(void *data)
+ 		if (need_to_boost_gc(sbi)) {
+ 			decrease_sleep_time(gc_th, &wait_ms);
+ 			if (f2fs_sb_has_blkzoned(sbi))
+-				gc_control.one_time = true;
++				gc_boost = true;
+ 		} else {
+ 			increase_sleep_time(gc_th, &wait_ms);
+ 		}
+@@ -144,7 +147,7 @@ do_gc:
+ 					FOREGROUND : BACKGROUND);
+ 
+ 		sync_mode = (F2FS_OPTION(sbi).bggc_mode == BGGC_MODE_SYNC) ||
+-				gc_control.one_time;
++				gc_boost;
+ 
+ 		/* foreground GC was been triggered via f2fs_balance_fs() */
+ 		if (foreground)
