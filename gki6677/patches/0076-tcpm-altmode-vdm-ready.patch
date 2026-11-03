@@ -1,0 +1,57 @@
+From: RD Babiera <rdbabiera@google.com>
+Date: Tue, 23 Apr 2024 20:23:57 +0000
+Subject: [PATCH] BACKPORT: usb: typec: tcpm: enforce ready state when queueing
+ alt mode vdm
+
+Before sending Enter Mode for an Alt Mode, there is a gap between Discover
+Modes and the Alt Mode driver queueing the Enter Mode VDM for the port
+partner to send a message to the port.
+
+If this message results in unregistering Alt Modes such as in a DR_SWAP,
+then the following deadlock can occur with respect to the DisplayPort Alt
+Mode driver:
+1. The DR_SWAP state holds port->lock. Unregistering the Alt Mode driver
+results in a cancel_work_sync() that waits for the current dp_altmode_work
+to finish.
+2. dp_altmode_work makes a call to tcpm_altmode_enter. The deadlock occurs
+because tcpm_queue_vdm_unlock attempts to hold port->lock.
+
+Before attempting to grab the lock, ensure that the port is in a state
+vdm_run_state_machine can run in. Alt Mode unregistration will not occur
+in these states.
+
+Fixes: 03eafcfb60c0 ("usb: typec: tcpm: Add tcpm_queue_vdm_unlocked() helper")
+Cc: stable@vger.kernel.org
+Signed-off-by: RD Babiera <rdbabiera@google.com>
+Reviewed-by: Heikki Krogerus <heikki.krogerus@linux.intel.com>
+Link: https://lore.kernel.org/r/20240423202356.3372314-2-rdbabiera@google.com
+Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+Bug: 427115182
+Bug: 416695677
+[rd: removed SRC_VDM_IDENTITY_REQUEST check, state not defined in branch]
+(cherry picked from commit cdc9946ea6377e8e214b135ccc308c5e514ba25f)
+Signed-off-by: RD Babiera <rdbabiera@google.com>
+(cherry picked from https://android-review.googlesource.com/q/commit:a06b5019a401196b416216ee8f140e3fe331f697)
+Merged-In: Ie35bfd7a653a1cf892d64bb9b9f0d4dbd01e91c2
+Change-Id: Ie35bfd7a653a1cf892d64bb9b9f0d4dbd01e91c2
+
+Origin: android.googlesource.com/kernel/common bdffdd806d8e96f9209a16715a272cccac60afc5
+Batch: B-3a (P4 pre-window sweep 2025-04..2026-01) - Class A, apply as-is; predicted ABI delta zero
+
+---
+diff --git a/drivers/usb/typec/tcpm/tcpm.c b/drivers/usb/typec/tcpm/tcpm.c
+index 25d4b451f..78f929e53 100644
+--- a/drivers/usb/typec/tcpm/tcpm.c
++++ b/drivers/usb/typec/tcpm/tcpm.c
+@@ -1534,6 +1534,10 @@ static void tcpm_queue_vdm(struct tcpm_port *port, const u32 header,
+ static void tcpm_queue_vdm_unlocked(struct tcpm_port *port, const u32 header,
+ 				    const u32 *data, int cnt)
+ {
++	if (port->state != SRC_READY && port->state != SNK_READY &&
++	    port->state != SRC_VDM_IDENTITY_REQUEST)
++		return;
++
+ 	mutex_lock(&port->lock);
+ 	tcpm_queue_vdm(port, header, data, cnt);
+ 	mutex_unlock(&port->lock);
