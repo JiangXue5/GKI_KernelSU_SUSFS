@@ -43,13 +43,20 @@ Change-Id: I2a857663bf151e618e30865ed2e687cd05171fd5
 
 Origin: android.googlesource.com/kernel/common b42557ff3c47d4699b18d509fb3844cee7a0653d
 Batch: B-3b (P4 pre-window sweep 2025-04..2026-01) - Class A, apply as-is; predicted ABI delta zero
+Reshape (gki6677 CI shot #6 follow-up sweep, run 41687360312): dropped the fourth helper
+skb_dst_dev_net_rcu() - it calls dev_net_rcu(), a newer-mainline helper that never reached
+the 2025-03 pin lineage, so the hunk cannot compile here (undeclared identifier at first
+parse of include/net/dst.h). The helper is unused by the pin tree and by the whole carried
+series; upstream 88fe14253e18 itself says "Add three helpers" in its message while carrying
+four in the diff - the dropped one is that fourth. The remaining three helpers are
+self-contained at the pin (READ_ONCE / skb_dst / dev_net all present).
 
 ---
 diff --git a/include/net/dst.h b/include/net/dst.h
 index 16b7b99b5..ddf21e935 100644
 --- a/include/net/dst.h
 +++ b/include/net/dst.h
-@@ -569,6 +569,26 @@ static inline void skb_dst_update_pmtu_no_confirm(struct sk_buff *skb, u32 mtu)
+@@ -569,6 +569,21 @@ static inline void skb_dst_update_pmtu_no_confirm(struct sk_buff *skb, u32 mtu)
  		dst->ops->update_pmtu(dst, NULL, skb, mtu, false);
  }
  
@@ -66,11 +73,6 @@ index 16b7b99b5..ddf21e935 100644
 +static inline struct net *skb_dst_dev_net(const struct sk_buff *skb)
 +{
 +	return dev_net(skb_dst_dev(skb));
-+}
-+
-+static inline struct net *skb_dst_dev_net_rcu(const struct sk_buff *skb)
-+{
-+	return dev_net_rcu(skb_dst_dev(skb));
 +}
 +
  struct dst_entry *dst_blackhole_check(struct dst_entry *dst, u32 cookie);
