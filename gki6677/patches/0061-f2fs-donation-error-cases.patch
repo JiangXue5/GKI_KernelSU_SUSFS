@@ -1,0 +1,135 @@
+From: Daeho Jeong <daehojeong@google.com>
+Date: Wed, 23 Apr 2025 13:49:34 -0700
+Subject: [PATCH] FROMGIT: f2fs: handle error cases of memory donation
+
+In cases of removing memory donation, we need to handle some error cases
+like ENOENT and EACCES (indicating the range already has been donated).
+
+Signed-off-by: Daeho Jeong <daehojeong@google.com>
+Reviewed-by: Chao Yu <chao@kernel.org>
+Signed-off-by: Jaegeuk Kim <jaegeuk@kernel.org>
+
+Bug: 412426536
+Bug: 418885708
+Change-Id: I22040d4b84235465f756e4c62e3981a9488ce2f7
+Signed-off-by: Daeho Jeong <daehojeong@google.com>
+(cherry picked from commit cf7cd17c97ad3808d9bd3840166b9216ccc777e1
+https: //git.kernel.org/pub/scm/linux/kernel/git/jaegeuk/f2fs.git/ dev)
+(cherry picked from commit 81e9737fdd850416dd66fc6534a2a6ef23c0194c)
+
+Origin: android.googlesource.com/kernel/common 431f91a19263ee926e4157a5d8a0f8efe5edeb5a
+Batch: B-3a (P4 pre-window sweep 2025-04..2026-01) - Class A, apply as-is; predicted ABI delta zero
+
+---
+diff --git a/fs/f2fs/f2fs.h b/fs/f2fs/f2fs.h
+index 78d17f2e2..681dd04d9 100644
+--- a/fs/f2fs/f2fs.h
++++ b/fs/f2fs/f2fs.h
+@@ -814,6 +814,7 @@ enum {
+ 	FI_ATOMIC_DIRTIED,	/* indicate atomic file is dirtied */
+ 	FI_ATOMIC_REPLACE,	/* indicate atomic replace */
+ 	FI_OPENED_FILE,		/* indicate file has been opened */
++	FI_DONATE_FINISHED,	/* indicate page donation of file has been finished */
+ 	FI_MAX,			/* max flag, never be used */
+ };
+ 
+diff --git a/fs/f2fs/file.c b/fs/f2fs/file.c
+index 276db1c7f..479d49dd4 100644
+--- a/fs/f2fs/file.c
++++ b/fs/f2fs/file.c
+@@ -2473,19 +2473,20 @@ static int f2fs_ioc_shutdown(struct file *filp, unsigned long arg)
+ 	return ret;
+ }
+ 
+-static void f2fs_keep_noreuse_range(struct inode *inode,
++static int f2fs_keep_noreuse_range(struct inode *inode,
+ 				loff_t offset, loff_t len)
+ {
+ 	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
+ 	u64 max_bytes = F2FS_BLK_TO_BYTES(max_file_blocks(inode));
+ 	u64 start, end;
++	int ret = 0;
+ 
+ 	if (!S_ISREG(inode->i_mode))
+-		return;
++		return 0;
+ 
+ 	if (offset >= max_bytes || len > max_bytes ||
+ 	    (offset + len) > max_bytes)
+-		return;
++		return 0;
+ 
+ 	start = offset >> PAGE_SHIFT;
+ 	end = DIV_ROUND_UP(offset + len, PAGE_SIZE);
+@@ -2493,7 +2494,7 @@ static void f2fs_keep_noreuse_range(struct inode *inode,
+ 	inode_lock(inode);
+ 	if (f2fs_is_atomic_file(inode)) {
+ 		inode_unlock(inode);
+-		return;
++		return 0;
+ 	}
+ 
+ 	spin_lock(&sbi->inode_lock[DONATE_INODE]);
+@@ -2502,7 +2503,12 @@ static void f2fs_keep_noreuse_range(struct inode *inode,
+ 		if (!list_empty(&F2FS_I(inode)->gdonate_list)) {
+ 			list_del_init(&F2FS_I(inode)->gdonate_list);
+ 			sbi->donate_files--;
+-		}
++			if (is_inode_flag_set(inode, FI_DONATE_FINISHED))
++				ret = -EALREADY;
++			else
++				set_inode_flag(inode, FI_DONATE_FINISHED);
++		} else
++			ret = -ENOENT;
+ 	} else {
+ 		if (list_empty(&F2FS_I(inode)->gdonate_list)) {
+ 			list_add_tail(&F2FS_I(inode)->gdonate_list,
+@@ -2514,9 +2520,12 @@ static void f2fs_keep_noreuse_range(struct inode *inode,
+ 		}
+ 		F2FS_I(inode)->donate_start = start;
+ 		F2FS_I(inode)->donate_end = end - 1;
++		clear_inode_flag(inode, FI_DONATE_FINISHED);
+ 	}
+ 	spin_unlock(&sbi->inode_lock[DONATE_INODE]);
+ 	inode_unlock(inode);
++
++	return ret;
+ }
+ 
+ static int f2fs_ioc_fitrim(struct file *filp, unsigned long arg)
+@@ -5250,8 +5259,8 @@ static int f2fs_file_fadvise(struct file *filp, loff_t offset, loff_t len,
+ 	     f2fs_compressed_file(inode)))
+ 		f2fs_invalidate_compress_pages(F2FS_I_SB(inode), inode->i_ino);
+ 	else if (advice == POSIX_FADV_NOREUSE)
+-		f2fs_keep_noreuse_range(inode, offset, len);
+-	return 0;
++		err = f2fs_keep_noreuse_range(inode, offset, len);
++	return err;
+ }
+ 
+ #ifdef CONFIG_COMPAT
+diff --git a/fs/f2fs/shrinker.c b/fs/f2fs/shrinker.c
+index 45efff635..732035052 100644
+--- a/fs/f2fs/shrinker.c
++++ b/fs/f2fs/shrinker.c
+@@ -184,10 +184,17 @@ static unsigned int do_reclaim_caches(struct f2fs_sb_info *sbi,
+ 		if (!inode)
+ 			continue;
+ 
+-		len = fi->donate_end - fi->donate_start + 1;
+-		npages = npages < len ? 0 : npages - len;
+-		invalidate_inode_pages2_range(inode->i_mapping,
++		inode_lock(inode);
++		if (!is_inode_flag_set(inode, FI_DONATE_FINISHED)) {
++			len = fi->donate_end - fi->donate_start + 1;
++			npages = npages < len ? 0 : npages - len;
++
++			invalidate_inode_pages2_range(inode->i_mapping,
+ 					fi->donate_start, fi->donate_end);
++			set_inode_flag(inode, FI_DONATE_FINISHED);
++		}
++		inode_unlock(inode);
++
+ 		iput(inode);
+ 		cond_resched();
+ 	}
