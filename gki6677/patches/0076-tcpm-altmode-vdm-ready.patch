@@ -38,18 +38,23 @@ Change-Id: Ie35bfd7a653a1cf892d64bb9b9f0d4dbd01e91c2
 
 Origin: android.googlesource.com/kernel/common bdffdd806d8e96f9209a16715a272cccac60afc5
 Batch: B-3a (P4 pre-window sweep 2025-04..2026-01) - Class A, apply as-is; predicted ABI delta zero
+Reshape (gki6677 CI shot #6, run 41687360312): dropped the SRC_VDM_IDENTITY_REQUEST
+clause - the state enum does not exist at the 2025-03 pin (absent from tcpm.c state
+list), so the upstream guard cannot compile here; this matches the [rd: removed
+SRC_VDM_IDENTITY_REQUEST check, state not defined in branch] resolution recorded
+above, and behavior on this tree is identical to upstream since the state never
+occurs without the newer-mainline state machine.
 
 ---
 diff --git a/drivers/usb/typec/tcpm/tcpm.c b/drivers/usb/typec/tcpm/tcpm.c
-index 25d4b451f..78f929e53 100644
+index 25d4b451f..e109ae2cfa0 100644
 --- a/drivers/usb/typec/tcpm/tcpm.c
 +++ b/drivers/usb/typec/tcpm/tcpm.c
-@@ -1534,6 +1534,10 @@ static void tcpm_queue_vdm(struct tcpm_port *port, const u32 header,
+@@ -1534,6 +1534,9 @@ static void tcpm_queue_vdm(struct tcpm_port *port, const u32 header,
  static void tcpm_queue_vdm_unlocked(struct tcpm_port *port, const u32 header,
  				    const u32 *data, int cnt)
  {
-+	if (port->state != SRC_READY && port->state != SNK_READY &&
-+	    port->state != SRC_VDM_IDENTITY_REQUEST)
++	if (port->state != SRC_READY && port->state != SNK_READY)
 +		return;
 +
  	mutex_lock(&port->lock);
