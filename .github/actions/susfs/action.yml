@@ -158,6 +158,11 @@ runs:
     - name: Enable SUSFS Kernel Configs
       if: inputs.enabled == 'true'
       uses: ./.github/actions/susfs-config
+      with:
+        # Lets susfs-config derive the CONFIG_KSU_SUSFS_* set from this
+        # branch's 50_add_susfs_in_gki-<version>.patch (self-healing: new
+        # susfs features get enabled without touching this workflow).
+        version: ${{ inputs.version }}
 
     - name: Apply SUSFS Patches
       if: inputs.enabled == 'true'

@@ -272,9 +272,16 @@ jobs:
           # the previous pins - "susfs: Add priority uid filter" (2026-10-24),
           # "kernel & KernelSU: Sync with upstream", "Update README.md", plus the
           # 2026-10-27 fix "priority uid filter: Fix UAF bugs and worker not able
-          # to run". The new filter is guarded by CONFIG_KSU_SUSFS only (no new
-          # config symbol) and susfs_is_priority_uid_filtered() is defined in
-          # fs/susfs.c, so the config list needs no change.
+          # to run". NOTE (updated 2026-11-03): this comment originally said the
+          # filter was "guarded by CONFIG_KSU_SUSFS only (no new config symbol)"
+          # - true for those pins, but the current stable tips (gki-android15-6.6
+          # @ c7f670f5 and later) moved it behind a DEDICATED symbol,
+          # CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER, which SukiSU-Ultra's builtin
+          # carrier calls unconditionally (pkg_observer.c / supercall/dispatch.c).
+          # The susfs-config action now derives CONFIG_KSU_SUSFS_* from the
+          # applied SUSFS tree at build time, so new symbols like this one are
+          # picked up automatically instead of failing the build with -Werror
+          # (implicit-function-declaration + unused-function).
           declare -A PIN_SUSFS=(
             [susfs_commit_android12_5_10]="eb95da080c76724c4962d0c62e9af3be37d9d439"
             [susfs_commit_android13_5_10]="a9bc1852785cc5288b587169752c74353b2110d6"

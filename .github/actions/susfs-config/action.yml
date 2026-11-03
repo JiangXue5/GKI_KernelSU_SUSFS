@@ -1,20 +1,132 @@
 name: 'Enable SUSFS Kernel Configs'
-description: 'Enable SUSFS-related kernel configuration options'
+description: 'Enable SUSFS-related kernel configuration options: static baseline plus every KSU_SUSFS symbol auto-derived from the applied SUSFS tree (self-healing)'
+
+inputs:
+  version:
+    description: 'Kernel config version (e.g., android15-6.6). Selects the per-branch 50_add_susfs_in_gki-<version>.patch used to discover the SUSFS Kconfig symbols; empty = scan all branch patches.'
+    required: false
+    default: ""
 
 runs:
   using: "composite"
   steps:
+    - name: Derive SUSFS config set from the applied SUSFS tree
+      id: derive
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        # Why this step exists: SUSFS stable gains config-gated features over
+        # time (2026-10-24 "priority uid filter" -> dedicated symbol
+        # CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER on the gki-* branch tips), and
+        # SukiSU-Ultra's builtin carrier calls the new API unconditionally.
+        # A frozen config list then fails the build with -Werror
+        # (implicit-function-declaration for the susfs.h prototypes inside the
+        # new #ifdef, plus unused-function for susfs.c helpers whose only
+        # callers live inside it). Deriving the symbol set from the very tree
+        # this build applies makes the next feature pick itself up.
+        #
+        # Sources, in trust order:
+        #   1. kernel_patches/50_add_susfs_in_gki-<version>.patch - its Kconfig
+        #      hunk is the authoritative definition set for this branch.
+        #   2. kernel_patches/include/linux/susfs.h + kernel_patches/fs/susfs.c
+        #      - the CONFIG_KSU_SUSFS_* guards in the applied sources (safety
+        #      net for layout/patch-name changes).
+        # The static baseline below is kept verbatim as a floor: if the SUSFS
+        # clone is missing or yields nothing, behavior is exactly the old one.
+
+        SUSFS_DIR="${{ github.workspace }}/susfs4ksu"
+        VERSION="${{ inputs.version }}"
+
+        # Historical static list, minus the =y suffixes. Order preserved.
+        BASELINE="KSU_SUSFS
+        KSU_SUSFS_SUS_PATH
+        KSU_SUSFS_SUS_MOUNT
+        KSU_SUSFS_SUS_KSTAT
+        KSU_SUSFS_SPOOF_UNAME
+        KSU_SUSFS_ENABLE_LOG
+        KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
+        KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG
+        KSU_SUSFS_SUS_MAP
+        KSU_SUSFS_OPEN_REDIRECT"
+
+        # Symbols to never auto-enable even when the SUSFS tree defines them
+        # (future debug/opt-in features go here). Empty today.
+        DENY_RE=""
+
+        LIST="$(printf '%s\n' "$BASELINE" | sed '/^[[:space:]]*$/d')"
+        added=""
+
+        add_sym() { # symbol
+          local sym="$1"
+          [ -n "$sym" ] || return 0
+          # shape guard: symbol body only, no stray characters from patches
+          printf '%s' "$sym" | grep -qE '^KSU_SUSFS(_[A-Z0-9_]+)?$' || return 0
+          if [ -n "$DENY_RE" ] && printf '%s' "$sym" | grep -qE "$DENY_RE"; then
+            echo "Skipping $sym (denylisted)" >&2
+            return 0
+          fi
+          if printf '%s\n' "$LIST" | grep -qx "$sym"; then return 0; fi
+          LIST="$LIST
+        $sym"
+          added="$added CONFIG_${sym}=y"
+        }
+
+        if [ ! -d "$SUSFS_DIR" ]; then
+          echo "::warning::SUSFS tree not found at $SUSFS_DIR - applying the static baseline config list only; a newer SUSFS feature may be left disabled" >&2
+        else
+          # Source 1: per-branch patch Kconfig hunk (authoritative definitions).
+          PATCHES=""
+          if [ -n "$VERSION" ] && [ -f "$SUSFS_DIR/kernel_patches/50_add_susfs_in_gki-${VERSION}.patch" ]; then
+            PATCHES="$SUSFS_DIR/kernel_patches/50_add_susfs_in_gki-${VERSION}.patch"
+          else
+            PATCHES="$(ls "$SUSFS_DIR"/kernel_patches/50_add_susfs_in_gki-*.patch 2>/dev/null || true)"
+            if [ -n "$VERSION" ] && [ -n "$PATCHES" ]; then
+              echo "::warning::50_add_susfs_in_gki-${VERSION}.patch not found; derived symbols from all branch patches" >&2
+            fi
+          fi
+          if [ -n "$PATCHES" ]; then
+            while IFS= read -r pf; do
+              [ -f "$pf" ] || continue
+              while IFS= read -r sym; do
+                add_sym "$sym"
+              done < <(sed -nE 's/^\+[[:space:]]*config[[:space:]]+(KSU_SUSFS_[A-Z0-9_]+).*/\1/p' "$pf")
+            done <<< "$PATCHES"
+          else
+            echo "::warning::no 50_add_susfs_in_gki-*.patch under $SUSFS_DIR/kernel_patches - Kconfig symbols could not be derived from patches" >&2
+          fi
+
+          # Source 2: config guards in the applied sources (safety net).
+          for sf in "$SUSFS_DIR/kernel_patches/include/linux/susfs.h" \
+                    "$SUSFS_DIR/kernel_patches/fs/susfs.c"; do
+            [ -f "$sf" ] || continue
+            while IFS= read -r sym; do
+              add_sym "$sym"
+            done < <(grep -ohE 'CONFIG_KSU_SUSFS_[A-Z0-9_]+' "$sf" \
+                     | sed -E 's/^CONFIG_//' | sort -u)
+          done
+        fi
+
+        OUT=""
+        while IFS= read -r sym; do
+          [ -n "$sym" ] || continue
+          OUT="${OUT}CONFIG_${sym}=y
+        "
+        done <<< "$LIST"
+
+        if [ -n "$added" ]; then
+          echo "::notice::SUSFS config self-heal: auto-enabled from the applied SUSFS tree:$added" >&2
+        else
+          echo "No symbols beyond the static baseline were discovered in the SUSFS tree" >&2
+        fi
+
+        {
+          echo "config_list<<SUSFS_CONFIG_LIST_EOF"
+          printf '%s' "$OUT"
+          echo "SUSFS_CONFIG_LIST_EOF"
+        } >> "$GITHUB_OUTPUT"
+
     - name: Enable SUSFS Kernel Configs
       uses: ./.github/actions/set-kernel-config
       with:
-        config_list: |
-          CONFIG_KSU_SUSFS=y
-          CONFIG_KSU_SUSFS_SUS_PATH=y
-          CONFIG_KSU_SUSFS_SUS_MOUNT=y
-          CONFIG_KSU_SUSFS_SUS_KSTAT=y
-          CONFIG_KSU_SUSFS_SPOOF_UNAME=y
-          CONFIG_KSU_SUSFS_ENABLE_LOG=y
-          CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
-          CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
-          CONFIG_KSU_SUSFS_SUS_MAP=y
-          CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
+        config_list: ${{ steps.derive.outputs.config_list }}
