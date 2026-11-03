@@ -1,0 +1,43 @@
+From: Chao Yu <chao@kernel.org>
+Date: Thu, 31 Jul 2025 14:03:38 +0800
+Subject: [PATCH] FROMGIT: f2fs: fix condition in __allow_reserved_blocks()
+
+If reserve_root mount option is not assigned, __allow_reserved_blocks()
+will return false, it's not correct, fix it.
+
+Fixes: 7e65be49ed94 ("f2fs: add reserved blocks for root user")
+Signed-off-by: Chao Yu <chao@kernel.org>
+Signed-off-by: Jaegeuk Kim <jaegeuk@kernel.org>
+(cherry picked from commit e75ce117905d2830976a289e718470f3230fa30a https://git.kernel.org/pub/scm/linux/kernel/git/jaegeuk/f2fs.git dev)
+
+Bug: 440276987
+Bug: 446106513
+Change-Id: Ie24d0d0b1b8bd81751f2210a138a4a7bc0914a12
+Signed-off-by: panchuang <panchuang@vivo.corp-partner.google.com>
+
+Origin: android.googlesource.com/kernel/common 92a7e4d856938daad0e6f1f5b82efb9f59f1eb50
+Batch: B-3a (P4 pre-window sweep 2025-04..2026-01) - Class A, apply as-is; predicted ABI delta zero
+
+---
+diff --git a/fs/f2fs/f2fs.h b/fs/f2fs/f2fs.h
+index 58b10ebed..486fa3ce3 100644
+--- a/fs/f2fs/f2fs.h
++++ b/fs/f2fs/f2fs.h
+@@ -2359,8 +2359,6 @@ static inline bool __allow_reserved_blocks(struct f2fs_sb_info *sbi,
+ {
+ 	if (!inode)
+ 		return true;
+-	if (!test_opt(sbi, RESERVE_ROOT))
+-		return false;
+ 	if (IS_NOQUOTA(inode))
+ 		return true;
+ 	if (uid_eq(F2FS_OPTION(sbi).s_resuid, current_fsuid()))
+@@ -2381,7 +2379,7 @@ static inline unsigned int get_available_block_count(struct f2fs_sb_info *sbi,
+ 	avail_user_block_count = sbi->user_block_count -
+ 					sbi->current_reserved_blocks;
+ 
+-	if (!__allow_reserved_blocks(sbi, inode, cap))
++	if (test_opt(sbi, RESERVE_ROOT) && !__allow_reserved_blocks(sbi, inode, cap))
+ 		avail_user_block_count -= F2FS_OPTION(sbi).root_reserved_blocks;
+ 
+ 	if (unlikely(is_sbi_flag_set(sbi, SBI_CP_DISABLED))) {
