@@ -1,0 +1,54 @@
+From: Carlos Llamas <cmllamas@google.com>
+Date: Thu, 6 Nov 2025 00:10:18 +0000
+Subject: [PATCH] ANDROID: binder: use task->prio for transaction PI
+
+Callers priority might have been temporarily boosted, which wouldn't be
+reflected under task->normal_prio during transactions. Let's use the
+dynamic priority task->prio instead, this makes sure that the boosted
+priority is effectively transferred to the target thread.
+
+Bug: 476994679
+Bug: 448613725
+Cc: Qais Yousef <qyousef@google.com>
+Cc: John Stultz <jstultz@google.com>
+Cc: Kartar Singh <kartarsingh@google.com>
+Signed-off-by: Carlos Llamas <cmllamas@google.com>
+Cherrypick-From: https://android-review.googlesource.com/q/commit:f6681db7d636f752c815f6dc1a90558204e437a2
+Merged-In: I8eedc06d84a129dc5772626f879ecb216fef9e6c
+Change-Id: I8eedc06d84a129dc5772626f879ecb216fef9e6c
+
+Origin: android.googlesource.com/kernel/common b60d5bc1d7366cf75b8d7c50217b53a80f13069a
+Batch: B-3a (P4 pre-window sweep 2025-04..2026-01) - Class A, apply as-is; predicted ABI delta zero
+
+---
+diff --git a/drivers/android/binder.c b/drivers/android/binder.c
+index e18167f61..35643b088 100644
+--- a/drivers/android/binder.c
++++ b/drivers/android/binder.c
+@@ -717,7 +717,7 @@ static void binder_do_set_priority(struct binder_thread *thread,
+ 	bool has_cap_nice;
+ 	unsigned int policy = desired->sched_policy;
+ 
+-	if (task->policy == policy && task->normal_prio == desired->prio) {
++	if (task->policy == policy && task->prio == desired->prio) {
+ 		spin_lock(&thread->prio_lock);
+ 		if (thread->prio_state == BINDER_PRIO_PENDING)
+ 			thread->prio_state = BINDER_PRIO_SET;
+@@ -759,7 +759,7 @@ static void binder_do_set_priority(struct binder_thread *thread,
+ 			      task->pid, desired->prio,
+ 			      to_kernel_prio(policy, priority));
+ 
+-	trace_binder_set_priority(task->tgid, task->pid, task->normal_prio,
++	trace_binder_set_priority(task->tgid, task->pid, task->prio,
+ 				  to_kernel_prio(policy, priority),
+ 				  desired->prio);
+ 
+@@ -3486,7 +3486,7 @@ static void binder_transaction(struct binder_proc *proc,
+ 	    binder_supported_policy(current->policy)) {
+ 		/* Inherit supported policies for synchronous transactions */
+ 		t->priority.sched_policy = current->policy;
+-		t->priority.prio = current->normal_prio;
++		t->priority.prio = current->prio;
+ 	} else {
+ 		/* Otherwise, fall back to the default priority */
+ 		t->priority = target_proc->default_priority;
