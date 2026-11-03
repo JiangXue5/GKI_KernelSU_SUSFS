@@ -1,5 +1,5 @@
 name: 'Enable SUSFS Kernel Configs'
-description: 'Enable SUSFS-related kernel configuration options: static baseline plus every KSU_SUSFS symbol auto-derived from the applied SUSFS tree (self-healing)'
+description: 'Enable SUSFS-related kernel configuration options: static baseline plus every KSU_SUSFS symbol auto-derived from the applied SUSFS tree (self-healing), including Kconfig definitions for symbols the applied tree references but nobody defines'
 
 inputs:
   version:
@@ -29,9 +29,10 @@ runs:
         # Sources, in trust order:
         #   1. kernel_patches/50_add_susfs_in_gki-<version>.patch - its Kconfig
         #      hunk is the authoritative definition set for this branch.
-        #   2. kernel_patches/include/linux/susfs.h + kernel_patches/fs/susfs.c
-        #      - the CONFIG_KSU_SUSFS_* guards in the applied sources (safety
-        #      net for layout/patch-name changes).
+        #   2. kernel_patches/fs/ + kernel_patches/include/linux/ - the
+        #      CONFIG_KSU_SUSFS_* guards in exactly the files susfs-patches
+        #      copies into the kernel tree (susfs.c, susfs.h, susfs_def.h, ...
+        #      safety net for layout/patch-name changes).
         # The static baseline below is kept verbatim as a floor: if the SUSFS
         # clone is missing or yields nothing, behavior is exactly the old one.
 
@@ -96,13 +97,16 @@ runs:
             echo "::warning::no 50_add_susfs_in_gki-*.patch under $SUSFS_DIR/kernel_patches - Kconfig symbols could not be derived from patches" >&2
           fi
 
-          # Source 2: config guards in the applied sources (safety net).
-          for sf in "$SUSFS_DIR/kernel_patches/include/linux/susfs.h" \
-                    "$SUSFS_DIR/kernel_patches/fs/susfs.c"; do
-            [ -f "$sf" ] || continue
+          # Source 2: config guards in the applied sources (safety net). Scan
+          # exactly what the susfs-patches step copies into the kernel tree
+          # (fs/ and include/linux/), so symbols gated in susfs_def.h or any
+          # future file are picked up too, not just susfs.c/susfs.h.
+          for sd in "$SUSFS_DIR/kernel_patches/fs" \
+                    "$SUSFS_DIR/kernel_patches/include/linux"; do
+            [ -d "$sd" ] || continue
             while IFS= read -r sym; do
               add_sym "$sym"
-            done < <(grep -ohE 'CONFIG_KSU_SUSFS_[A-Z0-9_]+' "$sf" \
+            done < <(grep -rohE 'CONFIG_KSU_SUSFS_[A-Z0-9_]+' "$sd" \
                      | sed -E 's/^CONFIG_//' | sort -u)
           done
         fi
@@ -125,6 +129,72 @@ runs:
           printf '%s' "$OUT"
           echo "SUSFS_CONFIG_LIST_EOF"
         } >> "$GITHUB_OUTPUT"
+
+    # A defconfig line for a symbol that NO Kconfig in the tree defines is
+    # dropped silently by scripts/kconfig: "CONFIG_X=y" in gki_defconfig then
+    # does nothing, the feature compiles out, and the build fails under
+    # -Werror. Hit for real on susfs gki-android15-6.6 tip c7f670f:
+    # CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER is used by fs/susfs.c +
+    # include/linux/susfs.h, but the 50_add_susfs_in_gki-*.patch carries no
+    # Kconfig hunk at all on the gki-* branches and the SukiSU-Ultra driver
+    # Kconfig only defines the 10 baseline symbols. fs/susfs.o then died with
+    # unused-function (susfs_switch_to_ksu_domain / susfs_restore_creds, whose
+    # only callers live inside the new #ifdef) plus
+    # implicit-function-declaration (pkg_observer.c calls the now-hidden
+    # susfs_parse_priority_app_strings() prototype).
+    #
+    # So before the defconfig is patched, make sure every derived symbol is
+    # DEFINED: check the whole kernel tree (find -L follows the
+    # drivers/kernelsu symlink into the KSU driver checkout) and append a
+    # minimal stanza to fs/Kconfig - susfs.c's own directory - for anything
+    # undefined. Self-healing in both directions: once the fork Kconfig or the
+    # susfs patch ships a real definition, injection stops for that symbol.
+    - name: Define derived KSU_SUSFS_* symbols missing from Kconfig
+      shell: bash
+      working-directory: ${{ github.workspace }}/kernel/common
+      run: |
+        set -euo pipefail
+
+        [ -f fs/Kconfig ] || { echo "::error::fs/Kconfig not found"; exit 1; }
+
+        # Kconfig files across the tree, following symlinked KSU driver trees.
+        find -L . \( -name Kconfig -o -name 'Kconfig.*' \) -type f \
+          > /tmp/susfs_kconfigs.txt 2>/dev/null || true
+        [ -s /tmp/susfs_kconfigs.txt ] || { echo "::error::no Kconfig files found"; exit 1; }
+
+        injected=""
+        while IFS= read -r line || [ -n "$line" ]; do
+          case "$line" in CONFIG_*=*) ;; *) continue ;; esac
+          sym="${line#CONFIG_}"; sym="${sym%%=*}"
+          # Same shape guard as the derive step: KSU_-prefixed symbols only,
+          # so a stray token from the output can never become a Kconfig entry.
+          case "$sym" in KSU_SUSFS|KSU_SUSFS_[A-Z0-9_]*) ;; *) continue ;; esac
+          if grep -qsE "^[[:space:]]*(menu)?config[[:space:]]+${sym}([[:space:]]|$)" \
+               $(cat /tmp/susfs_kconfigs.txt); then
+            continue
+          fi
+          # printf, not echo: \t is only expanded by printf's format string,
+          # and Kconfig property lines must carry real indentation.
+          {
+            printf '\n'
+            printf '# susfs-config self-heal: %s is referenced by the applied SUSFS tree\n' "$sym"
+            printf '# but has no Kconfig definition anywhere (kernel tree + KSU driver), so its\n'
+            printf '# =y defconfig line is dropped silently and the feature compiles out -\n'
+            printf '# fatal under -Werror once a driver calls the new API. Remove this stanza\n'
+            printf '# once a real definition ships in the susfs patch or the driver Kconfig.\n'
+            printf 'config %s\n' "$sym"
+            printf '\tbool "SUSFS: %s (CI-injected definition)"\n' "$sym"
+            printf '\tdefault n\n'
+          } >> fs/Kconfig
+          injected="$injected CONFIG_${sym}"
+          echo "Injected Kconfig definition for ${sym} into fs/Kconfig"
+        done < <(printf '%s' "${{ steps.derive.outputs.config_list }}")
+
+        if [ -n "$injected" ]; then
+          echo "::notice::susfs-config self-heal: added Kconfig definitions for$injected (missing from the applied tree)" >&2
+        else
+          echo "All derived KSU_SUSFS_* symbols already have Kconfig definitions" >&2
+        fi
 
     - name: Enable SUSFS Kernel Configs
       uses: ./.github/actions/set-kernel-config
