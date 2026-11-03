@@ -1,0 +1,73 @@
+From: Neill Kapron <nkapron@google.com>
+Date: Thu, 28 Aug 2025 17:03:15 +0000
+Subject: [PATCH] BACKPORT: FROMGIT: selinux: enable per-file labeling for
+ functionfs
+
+This patch adds support for genfscon per-file labeling of functionfs
+files as well as support for userspace to apply labels after new
+functionfs endpoints are created.
+
+This allows for separate labels and therefore access control on a
+per-endpoint basis. An example use case would be for the default
+endpoint EP0 used as a restricted control endpoint, and additional
+usb endpoints to be used by other more permissive domains.
+
+It should be noted that if there are multiple functionfs mounts on a
+system, genfs file labels will apply to all mounts, and therefore will not
+likely be as useful as the userspace relabeling portion of this patch -
+the addition to selinux_is_genfs_special_handling().
+
+This patch introduces the functionfs_seclabel policycap to maintain
+existing functionfs genfscon behavior unless explicitly enabled.
+
+Signed-off-by: Neill Kapron <nkapron@google.com>
+Acked-by: Stephen Smalley <stephen.smalley.work@gmail.com>
+[PM: trim changelog, apply boolean logic fixup]
+Signed-off-by: Paul Moore <paul@paul-moore.com>
+
+Bug: 407985367
+Bug: 416223903
+Bug: 448699883
+Link: https://lore.kernel.org/selinux/20250828170317.2322582-1-nkapron@google.com
+(cherry picked from commit 68e1e908cb7682db9fb7f79907f9352435a81c0f
+https://git.kernel.org/pub/scm/linux/kernel/git/pcmoore/selinux.git
+next)
+[nkapron@google.com: removed functionfs policycap due to ABI breakage]
+Signed-off-by: Neill Kapron <nkapron@google.com>
+Cherrypick-From: https://android-review.googlesource.com/q/commit:532c452095b99e52580db02cd5842365b2bbb615
+Cherrypick-From: https://android-review.googlesource.com/q/commit:5ae711a95145e3ff15fa0cb8a3f41e95b53a5cdb
+Merged-In: I28c674e60ba5958bf2dbcb2d462270816d8e29c5
+Change-Id: I28c674e60ba5958bf2dbcb2d462270816d8e29c5
+
+Origin: android.googlesource.com/kernel/common 36df3534a9bf0d2544aa470a800d09a784a88c1d
+Batch: B-3a (P4 pre-window sweep 2025-04..2026-01) - Class A, apply as-is; predicted ABI delta zero
+
+---
+diff --git a/security/selinux/hooks.c b/security/selinux/hooks.c
+index d4a99d98e..7851c9fd4 100644
+--- a/security/selinux/hooks.c
++++ b/security/selinux/hooks.c
+@@ -462,7 +462,10 @@ static int selinux_is_genfs_special_handling(struct super_block *sb)
+ 		!strcmp(sb->s_type->name, "rootfs") ||
+ 		(selinux_policycap_cgroupseclabel() &&
+ 		 (!strcmp(sb->s_type->name, "cgroup") ||
+-		  !strcmp(sb->s_type->name, "cgroup2")));
++		  !strcmp(sb->s_type->name, "cgroup2"))) ||
++		// Android: remove functionfs policycap check due to
++		// ABI breakage with policycap array.
++		!strcmp(sb->s_type->name, "functionfs");
+ }
+ 
+ static int selinux_is_sblabel_mnt(struct super_block *sb)
+@@ -727,7 +730,10 @@ static int selinux_set_mnt_opts(struct super_block *sb,
+ 	    !strcmp(sb->s_type->name, "binder") ||
+ 	    !strcmp(sb->s_type->name, "bpf") ||
+ 	    !strcmp(sb->s_type->name, "pstore") ||
+-	    !strcmp(sb->s_type->name, "securityfs"))
++	    !strcmp(sb->s_type->name, "securityfs") ||
++	    // Android: remove functionfs policycap check due to
++	    // ABI breakage with policycap array.
++	    !strcmp(sb->s_type->name, "functionfs"))
+ 		sbsec->flags |= SE_SBGENFS;
+ 
+ 	if (!strcmp(sb->s_type->name, "sysfs") ||
