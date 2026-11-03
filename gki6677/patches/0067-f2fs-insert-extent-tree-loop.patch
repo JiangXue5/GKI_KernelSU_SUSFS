@@ -1,0 +1,43 @@
+From: Rui Chen <chenrui9@honor.com>
+Date: Fri, 19 Sep 2025 15:06:27 +0800
+Subject: [PATCH] FROMGIT: f2fs: fix infinite loop in __insert_extent_tree()
+
+When we get wrong extent info data, and look up extent_node in rb tree,
+it will cause infinite loop (CONFIG_F2FS_CHECK_FS=n). Avoiding this by
+return NULL and print some kernel messages in that case.
+
+Signed-off-by: wangzijie <wangzijie1@honor.com>
+Reviewed-by: Chao Yu <chao@kernel.org>
+Signed-off-by: Jaegeuk Kim <jaegeuk@kernel.org>
+
+Bug: 445867857
+Bug: 456667431
+(cherry picked from commit 23361bd54966b437e1ed3eb1a704572f4b279e58
+ https: //git.kernel.org/pub/scm/linux/kernel/git/jaegeuk/f2fs.git dev)
+Link: https://git.kernel.org/pub/scm/linux/kernel/git/jaegeuk/f2fs.git/commit/?h=dev-test&id=23361bd54966b437e1ed3eb1a704572f4b279e58
+Change-Id: Idfa7b478f874bad240896b410e91eb3b73ebaf95
+Signed-off-by: Rui Chen <chenrui9@honor.com>
+(cherry picked from commit c5148581b4b156aa72eda147989162d99af3d6bd)
+
+Origin: android.googlesource.com/kernel/common 08e4c34ce62d0ef375585a5aa5710e2fcf6f7645
+Batch: B-3a (P4 pre-window sweep 2025-04..2026-01) - Class A, apply as-is; predicted ABI delta zero
+
+---
+diff --git a/fs/f2fs/extent_cache.c b/fs/f2fs/extent_cache.c
+index 347b3b647..9db0d277b 100644
+--- a/fs/f2fs/extent_cache.c
++++ b/fs/f2fs/extent_cache.c
+@@ -604,7 +604,13 @@ static struct extent_node *__insert_extent_tree(struct f2fs_sb_info *sbi,
+ 			p = &(*p)->rb_right;
+ 			leftmost = false;
+ 		} else {
++			f2fs_err_ratelimited(sbi, "%s: corrupted extent, type: %d, "
++				"extent node in rb tree [%u, %u, %u], age [%llu, %llu], "
++				"extent node to insert [%u, %u, %u], age [%llu, %llu]",
++				__func__, et->type, en->ei.fofs, en->ei.blk, en->ei.len, en->ei.age,
++				en->ei.last_blocks, ei->fofs, ei->blk, ei->len, ei->age, ei->last_blocks);
+ 			f2fs_bug_on(sbi, 1);
++			return NULL;
+ 		}
+ 	}
+ 
