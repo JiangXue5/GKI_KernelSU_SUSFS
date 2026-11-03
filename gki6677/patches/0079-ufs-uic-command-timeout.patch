@@ -1,0 +1,45 @@
+From: Bart Van Assche <bvanassche@acm.org>
+Date: Thu, 8 May 2025 09:46:49 -0700
+Subject: [PATCH] FROMLIST: scsi: ufs: core: Increase the UIC command timeout
+ further
+
+On my development board I observed that it can take a little longer than
+two seconds before UIC completions are processed if the UART is enabled.
+Hence this patch that increases the UIC command timeout upper limit
+further.
+
+Bug: 426090643
+Bug: 416256403
+Signed-off-by: Bart Van Assche <bvanassche@acm.org>
+Change-Id: I2ffec096d85177e144f0976f1ccff5138f0522e1
+Link: https://lore.kernel.org/linux-scsi/20250508165411.3755300-1-bvanassche@acm.org/T/#u
+Signed-off-by: Bart Van Assche <bvanassche@google.com>
+(cherry picked from commit 783e329e85a14796af8797789091700db0b7afb3)
+Signed-off-by: Gina Ko <yichunko@google.com>
+
+Origin: android.googlesource.com/kernel/common 9ef19c71475cb1979e62ac61d814449947fa620d
+Batch: B-3a (P4 pre-window sweep 2025-04..2026-01) - Class A, apply as-is; predicted ABI delta zero
+
+---
+diff --git a/drivers/ufs/core/ufshcd.c b/drivers/ufs/core/ufshcd.c
+index 0a19c32e3..6e992c7ad 100644
+--- a/drivers/ufs/core/ufshcd.c
++++ b/drivers/ufs/core/ufshcd.c
+@@ -57,7 +57,7 @@ EXPORT_TRACEPOINT_SYMBOL_GPL(ufshcd_command);
+ /* UIC command timeout, unit: ms */
+ enum {
+ 	UIC_CMD_TIMEOUT_DEFAULT	= 500,
+-	UIC_CMD_TIMEOUT_MAX	= 2000,
++	UIC_CMD_TIMEOUT_MAX	= 5000,
+ };
+ /* NOP OUT retries waiting for NOP IN response */
+ #define NOP_OUT_RETRIES    10
+@@ -134,7 +134,7 @@ static const struct kernel_param_ops uic_cmd_timeout_ops = {
+ 
+ module_param_cb(uic_cmd_timeout, &uic_cmd_timeout_ops, &uic_cmd_timeout, 0644);
+ MODULE_PARM_DESC(uic_cmd_timeout,
+-		 "UFS UIC command timeout in milliseconds. Defaults to 500ms. Supported values range from 500ms to 2 seconds inclusively");
++		 "UFS UIC command timeout in milliseconds. Defaults to 500ms. Supported values range from 500ms to 5 seconds inclusively");
+ 
+ #define ufshcd_toggle_vreg(_dev, _vreg, _on)				\
+ 	({                                                              \
