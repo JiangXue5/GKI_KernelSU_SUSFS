@@ -1,0 +1,60 @@
+From: Lianqin Hu <hulianqin@vivo.corp-partner.google.com>
+Date: Fri, 19 Dec 2025 14:30:20 +0800
+Subject: [PATCH] FROMGIT: usb: dwc3: keep susphy enabled during exit to avoid
+ controller faults
+
+On some platforms, switching USB roles from host to device can trigger
+controller faults due to premature PHY power-down. This occurs when the
+PHY is disabled too early during teardown, causing synchronization
+issues between the PHY and controller.
+
+Keep susphy enabled during dwc3_host_exit() and dwc3_gadget_exit()
+ensures the PHY remains in a low-power state capable of handling
+required commands during role switch.
+
+Cc: stable <stable@kernel.org>
+Fixes: 6d735722063a ("usb: dwc3: core: Prevent phy suspend during init")
+Suggested-by: Thinh Nguyen <Thinh.Nguyen@synopsys.com>
+Signed-off-by: Udipto Goswami <udipto.goswami@oss.qualcomm.com>
+Acked-by: Thinh Nguyen <Thinh.Nguyen@synopsys.com>
+Link: https://patch.msgid.link/20251126054221.120638-1-udipto.goswami@oss.qualcomm.com
+Signed-off-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+
+(cherry picked from commit e1003aa7ec9eccdde4c926bd64ef42816ad55f25 https://git.kernel.org/pub/scm/linux/kernel/git/gregkh/usb.git usb-linus)
+
+Bug: 471515592
+Bug: 470217079
+Change-Id: I5c9f513e4424c31f95626f8dc31bd04b66145dcd
+Signed-off-by: Lianqin Hu <hulianqin@vivo.corp-partner.google.com>
+(cherry picked from commit 3bd6ce8d7d989b14d92b41d478004997c24e6674)
+
+Origin: android.googlesource.com/kernel/common db60bc69629a4359b2f9673ca28b70eead433bfc
+Batch: B-3a (P4 pre-window sweep 2025-04..2026-01) - Class A, apply as-is; predicted ABI delta zero
+
+---
+diff --git a/drivers/usb/dwc3/gadget.c b/drivers/usb/dwc3/gadget.c
+index 0cfb97570..ccebab2e3 100644
+--- a/drivers/usb/dwc3/gadget.c
++++ b/drivers/usb/dwc3/gadget.c
+@@ -4787,7 +4787,7 @@ void dwc3_gadget_exit(struct dwc3 *dwc)
+ 	if (!dwc->gadget)
+ 		return;
+ 
+-	dwc3_enable_susphy(dwc, false);
++	dwc3_enable_susphy(dwc, true);
+ 	usb_del_gadget(dwc->gadget);
+ 	dwc3_gadget_free_endpoints(dwc);
+ 	usb_put_gadget(dwc->gadget);
+diff --git a/drivers/usb/dwc3/host.c b/drivers/usb/dwc3/host.c
+index cc6449538..c5be6d649 100644
+--- a/drivers/usb/dwc3/host.c
++++ b/drivers/usb/dwc3/host.c
+@@ -173,7 +173,7 @@ void dwc3_host_exit(struct dwc3 *dwc)
+ 	if (dwc->sys_wakeup)
+ 		device_init_wakeup(&dwc->xhci->dev, false);
+ 
+-	dwc3_enable_susphy(dwc, false);
++	dwc3_enable_susphy(dwc, true);
+ 	platform_device_unregister(dwc->xhci);
+ 	dwc->xhci = NULL;
+ }
