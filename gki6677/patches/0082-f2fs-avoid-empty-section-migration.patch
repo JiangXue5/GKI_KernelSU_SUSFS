@@ -1,0 +1,95 @@
+From: Chao Yu <chao@kernel.org>
+Date: Mon, 1 Sep 2025 10:04:15 +0800
+Subject: [PATCH] BACKPORT: f2fs: fix to avoid migrating empty section
+
+It reports a bug from device w/ zufs:
+
+F2FS-fs (dm-64): Inconsistent segment (173822) type [1, 0] in SSA and
+SIT F2FS-fs (dm-64): Stopped filesystem due to reason: 4
+
+Thread A Thread B
+- f2fs_expand_inode_data
+ - f2fs_allocate_pinning_section
+  - f2fs_gc_range
+   - do_garbage_collect w/ segno #x
+					- writepage
+					 - f2fs_allocate_data_block
+					  - new_curseg
+					   - allocate segno #x
+
+The root cause is: fallocate on pinning file may race w/ block
+allocation as above, result in do_garbage_collect() from fallocate() may
+migrate segment which is just allocated by a log, the log will update
+segment type in its in-memory structure, however GC will get segment
+type from on-disk SSA block, once segment type changes by log, we can
+detect such inconsistency, then shutdown filesystem.
+
+In this case, on-disk SSA shows type of segno #173822 is 1
+(SUM_TYPE_NODE), however segno #173822 was just allocated as data type
+segment, so in-memory SIT shows type of segno #173822 is 0
+(SUM_TYPE_DATA).
+
+Change as below to fix this issue:
+- check whether current section is empty before gc
+- add sanity checks on do_garbage_collect() to avoid any race case, result
+in migrating segment used by log.
+- btw, it fixes misc issue in printed logs: "SSA and SIT" -> "SIT and SSA".
+
+Bug: 456000643
+Bug: 441042220
+(cherry picked from commit d625a2b08c089397d3a03bff13fa8645e4ec7a01)
+[Chao: adjust code to use IS_CURSEC() instead of is_cursec()]
+Fixes: 9703d69d9d15 ("f2fs: support file pinning for zoned devices")
+Cc: Daeho Jeong <daehojeong@google.com>
+Signed-off-by: Chao Yu <chao@kernel.org>
+Signed-off-by: Jaegeuk Kim <jaegeuk@kernel.org>
+Signed-off-by: Chao Yu <chao@kernel.org>
+Cherrypick-From: https://android-review.googlesource.com/q/commit:bf3f5d88ab1b003d0eed02fe398164710ba9a1d2
+Merged-In: I84b7853130255282540eb8bee79038907f50aded
+Change-Id: I84b7853130255282540eb8bee79038907f50aded
+
+Origin: android.googlesource.com/kernel/common ab8eb70a71b8906e3ceac53d2b10f027f8774bcb
+Batch: B-3a (P4 pre-window sweep 2025-04..2026-01) - Class A, apply as-is; predicted ABI delta zero
+
+---
+diff --git a/fs/f2fs/gc.c b/fs/f2fs/gc.c
+index e6139575e..57243d084 100644
+--- a/fs/f2fs/gc.c
++++ b/fs/f2fs/gc.c
+@@ -1800,6 +1800,13 @@ static int do_garbage_collect(struct f2fs_sb_info *sbi,
+ 					GET_SUM_BLOCK(sbi, segno));
+ 		f2fs_put_page(sum_page, 0);
+ 
++		if (IS_CURSEC(sbi, GET_SEC_FROM_SEG(sbi, segno))) {
++			f2fs_err(sbi, "%s: segment %u is used by log",
++							__func__, segno);
++			f2fs_bug_on(sbi, 1);
++			goto skip;
++		}
++
+ 		if (get_valid_blocks(sbi, segno, false) == 0)
+ 			goto freed;
+ 		if (gc_type == BG_GC && __is_large_section(sbi) &&
+@@ -1810,7 +1817,7 @@ static int do_garbage_collect(struct f2fs_sb_info *sbi,
+ 
+ 		sum = page_address(sum_page);
+ 		if (type != GET_SUM_TYPE((&sum->footer))) {
+-			f2fs_err(sbi, "Inconsistent segment (%u) type [%d, %d] in SSA and SIT",
++			f2fs_err(sbi, "Inconsistent segment (%u) type [%d, %d] in SIT and SSA",
+ 				 segno, type, GET_SUM_TYPE((&sum->footer)));
+ 			f2fs_stop_checkpoint(sbi, false,
+ 				STOP_CP_REASON_CORRUPTED_SUMMARY);
+@@ -2072,6 +2079,13 @@ int f2fs_gc_range(struct f2fs_sb_info *sbi,
+ 			.iroot = RADIX_TREE_INIT(gc_list.iroot, GFP_NOFS),
+ 		};
+ 
++		/*
++		 * avoid migrating empty section, as it can be allocated by
++		 * log in parallel.
++		 */
++		if (!get_valid_blocks(sbi, segno, true))
++			continue;
++
+ 		if (IS_CURSEC(sbi, GET_SEC_FROM_SEG(sbi, segno)))
+ 			continue;
+ 
