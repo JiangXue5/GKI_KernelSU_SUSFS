@@ -1,0 +1,89 @@
+From: "yohan.joung" <yohan.joung@sk.com>
+Date: Fri, 4 Apr 2025 08:21:06 +0900
+Subject: [PATCH] FROMGIT: f2fs: prevent the current section from being
+ selected as a victim during GC
+
+When selecting a victim using next_victim_seg in a large section, the
+selected section might already have been cleared and designated as the
+new current section, making it actively in use.
+This behavior causes inconsistency between the SIT and SSA.
+
+F2FS-fs (dm-54): Inconsistent segment (70961) type [0, 1] in SSA and SIT
+Call trace:
+dump_backtrace+0xe8/0x10c
+show_stack+0x18/0x28
+dump_stack_lvl+0x50/0x6c
+dump_stack+0x18/0x28
+f2fs_stop_checkpoint+0x1c/0x3c
+do_garbage_collect+0x41c/0x271c
+f2fs_gc+0x27c/0x828
+gc_thread_func+0x290/0x88c
+kthread+0x11c/0x164
+ret_from_fork+0x10/0x20
+
+issue scenario
+segs_per_sec=2
+- seg#0 and seg#1 are all dirty
+- all valid blocks are removed in seg#1
+- gc select this sec and next_victim_seg=seg#0
+- migrate seg#0, next_victim_seg=seg#1
+- checkpoint -> sec(seg#0, seg#1)  becomes free
+- allocator assigns sec(seg#0, seg#1) to curseg
+- gc tries to migrate seg#1
+
+Bug: 410356312
+Bug: 412502923
+(cherry picked from commit d26fecb03e1f1069480d41fa2a6cea87ebbb89b8
+https: //git.kernel.org/pub/scm/linux/kernel/git/jaegeuk/f2fs.git dev)
+Link: https://lore.kernel.org/linux-f2fs-devel/20250403232107.2960-1-yohan.joung@sk.com
+Fixes: e3080b0120a1 ("f2fs: support subsectional garbage collection")
+Signed-off-by: yohan.joung <yohan.joung@sk.com>
+Signed-off-by: Chao Yu <chao@kernel.org>
+Reviewed-by: Chao Yu <chao@kernel.org>
+Signed-off-by: Jaegeuk Kim <jaegeuk@kernel.org>
+(cherry picked from https://android-review.googlesource.com/q/commit:22fde3e08027dfaac76fd17c3df9e4b0558580ee)
+Merged-In: If2b6214eaa194779636458531ecd8dce391c6a22
+Change-Id: If2b6214eaa194779636458531ecd8dce391c6a22
+
+[gki6677 reshape note - 2026-11-04, Z.ai]
+Reshaped for the 6.6.77 pin (deprecated/android15-6.6-2025-03 @
+8d05d8f2439f): upstream re-anchors on the post-subsectional-GC
+early-exit form of __set_test_and_free() (goto unlock_out), while
+the pin still carries the nested form with the skip_free label.
+The four added statements are byte-identical to upstream and are
+inserted inside the pin's section-fully-freed branch
+(test_and_clear_bit on free_secmap == true, right after
+free_sections++), the exact guard upstream's fall-through reaches,
+so the net semantics are unchanged; braces are added because the
+pin pre-image is a single-statement if. The added lines exceed 80
+columns at the pin's nesting depth - kept verbatim over reflow per
+the reshape discipline. All referenced symbols (GET_SEC_FROM_SEG,
+next_victim_seg, NULL_SEGNO) exist at the pin (f2fs.h:1697, gc.c).
+Verified: statement-order compare vs upstream post-state; strict
+git apply --cached on the pin index (and at this patch's series
+position in the full B-3b rehearsal).
+
+Origin: android.googlesource.com/kernel/common 42c080cdf5fb852853459d409660ca8e29e334f4
+Batch: B-3b (P4 pre-window sweep 2025-04..2026-01) - Class B reshape (owner-approved 2026-11-03), re-anchored for the pin; predicted ABI delta zero
+
+---
+diff --git a/fs/f2fs/segment.h b/fs/f2fs/segment.h
+index 943be4f1d..2e7e774d5 100644
+--- a/fs/f2fs/segment.h
++++ b/fs/f2fs/segment.h
+@@ -474,8 +474,14 @@ static inline void __set_test_and_free(struct f2fs_sb_info *sbi,
+ 		next = find_next_bit(free_i->free_segmap,
+ 				start_segno + SEGS_PER_SEC(sbi), start_segno);
+ 		if (next >= start_segno + usable_segs) {
+-			if (test_and_clear_bit(secno, free_i->free_secmap))
++			if (test_and_clear_bit(secno, free_i->free_secmap)) {
+ 				free_i->free_sections++;
++
++				if (GET_SEC_FROM_SEG(sbi, sbi->next_victim_seg[BG_GC]) == secno)
++					sbi->next_victim_seg[BG_GC] = NULL_SEGNO;
++				if (GET_SEC_FROM_SEG(sbi, sbi->next_victim_seg[FG_GC]) == secno)
++					sbi->next_victim_seg[FG_GC] = NULL_SEGNO;
++			}
+ 		}
+ 	}
+ skip_free:
