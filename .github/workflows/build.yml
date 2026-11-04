@@ -86,6 +86,16 @@ on:
         required: false
         type: string
         default: "4k"
+      google_backport:
+        description: "Apply the Google upstream backport series (android15-6.6 legs; series branch auto-detected via the gki<digits> naming contract)"
+        required: false
+        type: boolean
+        default: false
+      google_backport_ref:
+        description: "Series source ref in this repo. Empty = AUTO: auto-detect the gki<V><P><sublevel> branch for this leg. A branch/tag/SHA pins an exact series state for reproducible builds."
+        required: false
+        type: string
+        default: ""
       stock_config_artifact:
         description: "Artifact name with prefetched stock configs (stock_<kver>[_16k].config)"
         required: false
@@ -170,6 +180,202 @@ jobs:
           android_version: ${{ inputs.android_version }}
           kernel_version: ${{ inputs.kernel_version }}
           os_patch_level: ${{ inputs.os_patch_level }}
+
+      - name: Apply Google Upstream Backport Series (auto-detected gki<sublevel>)
+        id: google-backport
+        if: inputs.google_backport && inputs.version == 'android15-6.6'
+        shell: bash
+        run: |
+          set -euo pipefail
+          GBP_TREE="${{ github.workspace }}/kernel/common"
+          GBP_VERSION="${{ inputs.version }}"
+          # family prefix <V><P> + dotted family, derived from the leg's kernel
+          # version (android15-6.6 -> 66 / 6.6). Family-agnostic by design: a
+          # new family needs threading + self-gate changes only (OQ-1).
+          GBP_VP="$(sed 's/^android15-//; s/\.//' <<<"$GBP_VERSION")"
+          GBP_KFAM="${GBP_VERSION#*-}"
+          GBP_GKI_RE="^gki${GBP_VP}([0-9]+)$"
+          GBP_TAG_RE="^${GBP_KFAM//./\\.}\.([0-9]+)-backport-"
+
+          # --- Stage 1: ref resolution (auto is the default; explicit pins) ---
+          GBP_REF="${{ inputs.google_backport_ref }}"
+          GBP_REF_MODE=explicit
+          GBP_CANDIDATES=""
+          if [[ -z "$GBP_REF" ]]; then
+            GBP_REF_MODE=auto
+            # naming contract: gki + digits ONLY, full match — gki-wip /
+            # gki_debug / gki6677test / gki6677-old can never match.
+            mapfile -t CANDS < <(git ls-remote --heads \
+                "${{ github.server_url }}/${{ github.repository }}" \
+                | awk '{print $2}' | sed 's|^refs/heads/||' \
+                | grep -E '^gki[0-9]+$' | sort)
+            if (( ${#CANDS[@]} == 0 )); then
+              echo "ERROR: no gki<digits> series branch found in ${{ github.repository }} (google_backport is ON)" >&2
+              exit 1                                                    # F11
+            fi
+            GBP_CANDIDATES="${CANDS[*]}"
+            WANT="gki${GBP_VP}${{ inputs.sublevel }}"                   # gki<V><P><sublevel> (today: gki66<sublevel>)
+            if printf '%s\n' "${CANDS[@]}" | grep -qx "$WANT"; then
+              GBP_REF="$WANT"
+            else
+              # F12: series not (yet) authored for this leg — skip, matrix continues
+              echo "GBP_STATE=skipped-no-series-branch" >> "$GITHUB_ENV"
+              {
+                echo "### Google upstream backport series"
+                echo "- State: skipped — no series branch \`${WANT}\` for this leg (auto mode)"
+                echo "- gki<digits> branches seen: ${GBP_CANDIDATES:-none}"
+              } >> "$GITHUB_STEP_SUMMARY"
+              echo "Series branch ${WANT} not found for this leg; gki branches seen: ${GBP_CANDIDATES:-none}. Skipping."
+              exit 0
+            fi
+          fi
+          [[ "$GBP_REF" =~ ^[A-Za-z0-9._/-]+$ && "$GBP_REF" != *..* ]] || { echo "ERROR: illegal ref: ${GBP_REF}" >&2; exit 1; }
+
+          # --- Stage 2: fetch the series tree (branch, tag and SHA all resolve
+          #     through this one path; GitHub serves raw-SHA fetches) ---------
+          git init -q "${{ github.workspace }}/series-src"
+          git -C "${{ github.workspace }}/series-src" fetch --depth=1 \
+              "${{ github.server_url }}/${{ github.repository }}" "$GBP_REF"
+          git -C "${{ github.workspace }}/series-src" checkout -q FETCH_HEAD
+          GBP_REF_HEAD="$(git -C "${{ github.workspace }}/series-src" rev-parse FETCH_HEAD)"
+
+          # --- Stage 3: series-root discovery by content (F13). Never derive
+          #     paths from the ref name — an explicit tag/SHA resolves to the
+          #     same tree under the branch-named directory. -------------------
+          mapfile -t ROOTS < <(find "${{ github.workspace }}/series-src" -mindepth 2 -maxdepth 2 \
+                               -name series.conf | sort)
+          if (( ${#ROOTS[@]} != 1 )); then
+            echo "ERROR: expected exactly one series.conf under series-src, found ${#ROOTS[@]}: ${ROOTS[*]:-none}" >&2
+            exit 1                                                      # F13
+          fi
+          GBP_SERIES_ROOT="${ROOTS[0]%/*}"
+          GBP_SERIES_CONF="${GBP_SERIES_ROOT}/series.conf"
+
+          # --- expected sublevel from the resolved ref (§2.2 of the wild doc):
+          #     auto -> leg sublevel; gki<V><P><n> / <V>.<P>.<n>-backport- tags
+          #     -> captured n; anything else -> leg sublevel + warning.
+          #     A gki<digits> ref from ANOTHER family is rejected outright —
+          #     sublevel and family mismatches are structurally impossible. ---
+          GBP_EXPECTED_SUBLEVEL="${{ inputs.sublevel }}"
+          if [[ "$GBP_REF_MODE" == explicit ]]; then
+            if [[ "$GBP_REF" =~ $GBP_GKI_RE ]]; then
+              GBP_EXPECTED_SUBLEVEL="${BASH_REMATCH[1]}"
+            elif [[ "$GBP_REF" =~ ^gki([0-9]+)$ ]]; then
+              echo "ERROR: series ref ${GBP_REF} belongs to a different kernel family than this ${GBP_KFAM} leg (this leg takes gki${GBP_VP}<sublevel> or ${GBP_KFAM}.<n>-backport-* refs)" >&2
+              exit 1                                                    # F6b (family)
+            elif [[ "$GBP_REF" =~ $GBP_TAG_RE ]]; then
+              GBP_EXPECTED_SUBLEVEL="${BASH_REMATCH[1]}"
+            else
+              echo "WARNING: ref ${GBP_REF} matches neither gki<V><P><sublevel> nor ${GBP_KFAM}.<n>-backport-*; the generation gate assumes this leg's sublevel (${{ inputs.sublevel }})" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          fi
+
+          # --- Makefile generation gate (F6b: sublevel AND family) -----------
+          GBP_MK="${GBP_TREE}/Makefile"
+          MK_VERSION="$(sed -n 's/^VERSION[[:space:]]*=[[:space:]]*\([0-9]\{1,\}\).*/\1/p' "$GBP_MK" | head -1)"
+          MK_PATCHLEVEL="$(sed -n 's/^PATCHLEVEL[[:space:]]*=[[:space:]]*\([0-9]\{1,\}\).*/\1/p' "$GBP_MK" | head -1)"
+          MK_SUBLEVEL="$(sed -n 's/^SUBLEVEL[[:space:]]*=[[:space:]]*\([0-9]\{1,\}\).*/\1/p' "$GBP_MK" | head -1)"
+          if [[ -z "$MK_VERSION" || -z "$MK_PATCHLEVEL" || -z "$MK_SUBLEVEL" ]]; then
+            echo "ERROR: cannot parse VERSION/PATCHLEVEL/SUBLEVEL from ${GBP_MK}" >&2
+            exit 1
+          fi
+          if [[ "$MK_VERSION" != "${GBP_KFAM%%.*}" || "$MK_PATCHLEVEL" != "${GBP_KFAM##*.}" || "$MK_SUBLEVEL" != "$GBP_EXPECTED_SUBLEVEL" ]]; then
+            echo "ERROR: series base mismatch (expected ${GBP_KFAM}.${GBP_EXPECTED_SUBLEVEL} tree, found ${MK_VERSION}.${MK_PATCHLEVEL}.${MK_SUBLEVEL})" >&2
+            exit 1                                                      # F6b
+          fi
+
+          # --- pre-flight scan: manifest, existence, numbering (fail before
+          #     any kernel-tree mutation) --------------------------------------
+          mapfile -t ENTRIES < <(grep -vE '^[[:space:]]*(#|$)' "$GBP_SERIES_CONF")
+          GBP_COUNT="${#ENTRIES[@]}"
+          if (( GBP_COUNT == 0 )); then
+            echo "ERROR: series.conf has zero entries: ${GBP_SERIES_CONF}" >&2
+            exit 1                                                      # F2
+          fi
+          log() { echo "[google-backport] $*"; }
+          log "series: ${GBP_SERIES_CONF} — ${GBP_COUNT} patch(es) (ref ${GBP_REF}, mode ${GBP_REF_MODE})"
+          MISSING=()
+          BADNUM=()
+          GAPS=()
+          PREV=0
+          for i in "${!ENTRIES[@]}"; do
+            entry="${ENTRIES[$i]}"
+            if [[ ! -f "${GBP_SERIES_ROOT}/patches/${entry}" ]]; then
+              MISSING+=("entry $((i+1)): ${entry}")
+            fi
+            if [[ "$entry" =~ ^([0-9]+)- ]]; then
+              num="$((10#${BASH_REMATCH[1]}))"
+              if (( num <= PREV )); then
+                BADNUM+=("entry $((i+1)): ${entry} (not strictly increasing; previous prefix $(printf '%04d' "$PREV"))")
+              fi
+              if (( PREV > 0 && num > PREV + 1 )); then
+                GAPS+=("$(printf '%04d' "$PREV") -> $(printf '%04d' "$num")")
+              fi
+              PREV=$num
+            else
+              BADNUM+=("entry $((i+1)): ${entry} (no NNNN- number prefix)")
+            fi
+          done
+          if (( ${#MISSING[@]} > 0 )); then
+            echo "ERROR: ${#MISSING[@]} series entry file(s) missing from ${GBP_SERIES_ROOT}/patches/:" >&2
+            printf '  %s\n' "${MISSING[@]}" >&2
+            exit 1                                                      # F3 (complete list, not first-miss-only)
+          fi
+          if (( ${#BADNUM[@]} > 0 )); then
+            echo "ERROR: series numbering corrupted:" >&2
+            printf '  %s\n' "${BADNUM[@]}" >&2
+            exit 1                                                      # F4
+          fi
+          if (( ${#GAPS[@]} > 0 )); then
+            echo "WARNING: series numbering has ${#GAPS[@]} gap(s): ${GAPS[*]} (expected only after enable-revert row removal, §3.4-pt-5)" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          # --- apply (the series' own apply-series.sh — zero application-logic
+          #     drift from Track A; strict git apply, no --3way) ---------------
+          log "applying onto ${GBP_TREE}"
+          KERNEL_DIR="$GBP_TREE" \
+            bash "${GBP_SERIES_ROOT}/scripts/apply-series.sh" \
+            "$GBP_SERIES_CONF"
+
+          # --- provenance (§2.5) ----------------------------------------------
+          GBP_SERIES_SHA="$(sha256sum "$GBP_SERIES_CONF" | cut -c1-12)"
+          {
+            echo "GBP_STATE=applied"
+            echo "GBP_APPLIED=${GBP_COUNT}"
+            echo "GBP_SERIES_SHA=${GBP_SERIES_SHA}"
+            echo "GBP_REF=${GBP_REF}"
+            echo "GBP_REF_MODE=${GBP_REF_MODE}"
+            echo "GBP_REF_HEAD=${GBP_REF_HEAD}"
+            echo "GBP_SERIES_ROOT=${GBP_SERIES_ROOT}"
+            echo "GBP_CANDIDATES=${GBP_CANDIDATES}"
+          } >> "$GITHUB_ENV"
+          {
+            echo "### Google upstream backport series"
+            echo "- State: applied — ${GBP_COUNT} patch(es) from \`${GBP_REF}\` (${GBP_REF_MODE} resolution)"
+            echo "- First/last: \`${ENTRIES[0]}\` … \`${ENTRIES[${#ENTRIES[@]}-1]}\`"
+            echo "- Series sha256 (series.conf): \`${GBP_SERIES_SHA}\`"
+            echo "- Series head: \`${GBP_REF_HEAD}\`"
+            echo "- Kernel source commit: \`${KERNEL_SOURCE_COMMIT:-unknown}\`"
+            if [[ "$GBP_REF_MODE" == auto ]]; then
+              echo "- gki<digits> branches seen: ${GBP_CANDIDATES:-none}"
+            fi
+            if [[ "${KERNEL_SOURCE_COMMIT:-}" == 8d05d8f2439f* ]]; then
+              echo "- KMI baseline: SeriesAuthoredAgainst=8d05d8f2439f"
+            else
+              echo "- WARNING: kernel source commit \`${KERNEL_SOURCE_COMMIT:-unknown}\` is not the series-authored pin 8d05d8f2439f (tag-fallback landed r33, or the tip moved) — strict apply confirmed the series still fits this tree."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Record Google Backport Skip (family gate)
+        if: inputs.google_backport && inputs.version != 'android15-6.6'
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "GBP_STATE=skipped-generation-gate" >> "$GITHUB_ENV"
+          {
+            echo "### Google upstream backport series"
+            echo "- State: skipped — toggle is ON but this leg is \`${{ inputs.version }}\`, outside the android15-6.6 self-gate (family expansion playbook: OQ-1)."
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Spoof /proc/config.gz With Stock Config
         uses: ./.github/actions/stock-config
