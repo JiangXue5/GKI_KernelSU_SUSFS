@@ -1,0 +1,76 @@
+From: Peter Collingbourne <pcc@google.com>
+Date: Wed, 2 Apr 2025 17:06:59 -0700
+Subject: [PATCH] FROMGIT: string: Add load_unaligned_zeropad() code path to
+ sized_strscpy()
+
+The call to read_word_at_a_time() in sized_strscpy() is problematic
+with MTE because it may trigger a tag check fault when reading
+across a tag granule (16 bytes) boundary. To make this code
+MTE compatible, let's start using load_unaligned_zeropad()
+on architectures where it is available (i.e. architectures that
+define CONFIG_DCACHE_WORD_ACCESS). Because load_unaligned_zeropad()
+takes care of page boundaries as well as tag granule boundaries,
+also disable the code preventing crossing page boundaries when using
+load_unaligned_zeropad().
+
+Signed-off-by: Peter Collingbourne <pcc@google.com>
+Link: https://linux-review.googlesource.com/id/If4b22e43b5a4ca49726b4bf98ada827fdf755548
+Fixes: 94ab5b61ee16 ("kasan, arm64: enable CONFIG_KASAN_HW_TAGS")
+Cc: stable@vger.kernel.org
+Reviewed-by: Catalin Marinas <catalin.marinas@arm.com>
+Link: https://lore.kernel.org/r/20250403000703.2584581-2-pcc@google.com
+Signed-off-by: Kees Cook <kees@kernel.org>
+Bug: 400752037
+Bug: 410902187
+(cherry picked from commit acc66d46810d1ce0fe530dd1dcc52ce4551731b7
+ https://git.kernel.org/pub/scm/linux/kernel/git/kees/linux.git for-next/hardening)
+(cherry picked from https://android-review.googlesource.com/q/commit:b5223b5d7f75758f775402e82bdff9a5e24d1cbf)
+Merged-In: If4b22e43b5a4ca49726b4bf98ada827fdf755548
+Change-Id: If4b22e43b5a4ca49726b4bf98ada827fdf755548
+
+Origin: android.googlesource.com/kernel/common 99886696efb73568312c7fb167c8530fb5444a59
+Batch: B-3b (P4 pre-window sweep 2025-04..2026-01) - Class A, apply as-is; predicted ABI delta zero
+
+---
+diff --git a/lib/string.c b/lib/string.c
+index be2662395..d49243af5 100644
+--- a/lib/string.c
++++ b/lib/string.c
+@@ -128,6 +128,7 @@ ssize_t strscpy(char *dest, const char *src, size_t count)
+ 	if (count == 0 || WARN_ON_ONCE(count > INT_MAX))
+ 		return -E2BIG;
+ 
++#ifndef CONFIG_DCACHE_WORD_ACCESS
+ #ifdef CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS
+ 	/*
+ 	 * If src is unaligned, don't cross a page boundary,
+@@ -142,12 +143,14 @@ ssize_t strscpy(char *dest, const char *src, size_t count)
+ 	/* If src or dest is unaligned, don't do word-at-a-time. */
+ 	if (((long) dest | (long) src) & (sizeof(long) - 1))
+ 		max = 0;
++#endif
+ #endif
+ 
+ 	/*
+-	 * read_word_at_a_time() below may read uninitialized bytes after the
+-	 * trailing zero and use them in comparisons. Disable this optimization
+-	 * under KMSAN to prevent false positive reports.
++	 * load_unaligned_zeropad() or read_word_at_a_time() below may read
++	 * uninitialized bytes after the trailing zero and use them in
++	 * comparisons. Disable this optimization under KMSAN to prevent
++	 * false positive reports.
+ 	 */
+ 	if (IS_ENABLED(CONFIG_KMSAN))
+ 		max = 0;
+@@ -155,7 +158,11 @@ ssize_t strscpy(char *dest, const char *src, size_t count)
+ 	while (max >= sizeof(unsigned long)) {
+ 		unsigned long c, data;
+ 
++#ifdef CONFIG_DCACHE_WORD_ACCESS
++		c = load_unaligned_zeropad(src+res);
++#else
+ 		c = read_word_at_a_time(src+res);
++#endif
+ 		if (has_zero(c, &data, &constants)) {
+ 			data = prep_zero_mask(c, data, &constants);
+ 			data = create_zero_mask(data);
