@@ -1,0 +1,178 @@
+From: Samuel Wu <wusamuel@google.com>
+Date: Wed, 19 Nov 2025 09:14:24 -0800
+Subject: [PATCH] BACKPORT: PM: sleep: Add support for wakeup during filesystem
+ sync
+
+Add helper function pm_sleep_fs_sync() and related data structures
+as a preparation for allowing system suspend and hibernation to be
+aborted by wakeup events while syncing file systems.
+
+The new function, to be called by the suspend process in order to
+sync file systems, uses a dedicated ordered workqueue to run
+ksys_sync_helper() in parallel with the calling process.  Next, it
+waits for the completion of the filesystem sync and periodically
+checks if any system wakeup events are pending, in which case it will
+return an error.
+
+If that happens while the filesystem sync is still in progress, it
+will continue, possibly after pm_sleep_fs_sync() has returned, and if
+that function is called again before the sync is complete, a new work
+item to run ksys_sync_helper() again will be queued (and waited for)
+to increase the likelihood of writing all of the dirty pages in memory
+back to persistent storage.
+
+Suggested-by: Saravana Kannan <saravanak@google.com>
+Signed-off-by: Samuel Wu <wusamuel@google.com>
+Co-developed-by: Rafael J. Wysocki <rafael.j.wysocki@intel.com>
+[ rjw: Subject and changelog rewrite, tags adjustment ]
+Link: https://patch.msgid.link/20251119171426.4086783-2-wusamuel@google.com
+Signed-off-by: Rafael J. Wysocki <rafael.j.wysocki@intel.com>
+
+Bug: 315272811
+Bug: 479518044
+(cherry picked from commit bf8867eae17fde94d7081545cf90ca8d5aba690a)
+[Samuel: Removed references to filesystem_freeze_enabled, which came in
+after 6.12]
+Signed-off-by: Samuel Wu <wusamuel@google.com>
+Cherrypick-From: https://android-review.googlesource.com/q/commit:56d45a81e6373a51bd18cb9c8a210d0e987d30e8
+Merged-In: I332ec0467a7280df61ce77386bca806b1c90fe6c
+Change-Id: I332ec0467a7280df61ce77386bca806b1c90fe6c
+
+Origin: android.googlesource.com/kernel/common 2ba4a8d701bea6aa3e861e4947871bc6fbfb74ec
+Batch: B-3b (P4 pre-window sweep 2025-04..2026-01) - Class A, apply as-is; predicted ABI delta zero
+
+---
+diff --git a/kernel/power/main.c b/kernel/power/main.c
+index a3543bd2d..968740d84 100644
+--- a/kernel/power/main.c
++++ b/kernel/power/main.c
+@@ -17,6 +17,8 @@
+ #include <linux/suspend.h>
+ #include <linux/syscalls.h>
+ #include <linux/pm_runtime.h>
++#include <linux/atomic.h>
++#include <linux/wait.h>
+ 
+ #include "power.h"
+ 
+@@ -95,6 +97,61 @@ void ksys_sync_helper(void)
+ }
+ EXPORT_SYMBOL_GPL(ksys_sync_helper);
+ 
++#if defined(CONFIG_SUSPEND) || defined(CONFIG_HIBERNATION)
++/* Wakeup events handling resolution while syncing file systems in jiffies */
++#define PM_FS_SYNC_WAKEUP_RESOLUTION	5
++
++static atomic_t pm_fs_sync_count = ATOMIC_INIT(0);
++static struct workqueue_struct *pm_fs_sync_wq;
++static DECLARE_WAIT_QUEUE_HEAD(pm_fs_sync_wait);
++
++static bool pm_fs_sync_completed(void)
++{
++	return atomic_read(&pm_fs_sync_count) == 0;
++}
++
++static void pm_fs_sync_work_fn(struct work_struct *work)
++{
++	ksys_sync_helper();
++
++	if (atomic_dec_and_test(&pm_fs_sync_count))
++		wake_up(&pm_fs_sync_wait);
++}
++static DECLARE_WORK(pm_fs_sync_work, pm_fs_sync_work_fn);
++
++/**
++ * pm_sleep_fs_sync() - Sync file systems in an interruptible way
++ *
++ * Return: 0 on successful file system sync, or -EBUSY if the file system sync
++ * was aborted.
++ */
++int pm_sleep_fs_sync(void)
++{
++	pm_wakeup_clear(0);
++
++	/*
++	 * Take back-to-back sleeps into account by queuing a subsequent fs sync
++	 * only if the previous fs sync is running or is not queued. Multiple fs
++	 * syncs increase the likelihood of saving the latest files immediately
++	 * before sleep.
++	 */
++	if (!work_pending(&pm_fs_sync_work)) {
++		atomic_inc(&pm_fs_sync_count);
++		queue_work(pm_fs_sync_wq, &pm_fs_sync_work);
++	}
++
++	while (!pm_fs_sync_completed()) {
++		if (pm_wakeup_pending())
++			return -EBUSY;
++
++		wait_event_timeout(pm_fs_sync_wait, pm_fs_sync_completed(),
++				   PM_FS_SYNC_WAKEUP_RESOLUTION);
++	}
++
++	return 0;
++}
++#endif /* CONFIG_SUSPEND || CONFIG_HIBERNATION */
++
+ /* Routines for PM-transition notifications */
+ 
+ static BLOCKING_NOTIFIER_HEAD(pm_chain_head);
+@@ -239,10 +296,10 @@ static ssize_t mem_sleep_store(struct kobject *kobj, struct kobj_attribute *attr
+ power_attr(mem_sleep);
+ 
+ /*
+- * sync_on_suspend: invoke ksys_sync_helper() before suspend.
++ * sync_on_suspend: Sync file systems before suspend.
+  *
+- * show() returns whether ksys_sync_helper() is invoked before suspend.
+- * store() accepts 0 or 1.  0 disables ksys_sync_helper() and 1 enables it.
++ * show() returns whether file systems sync before suspend is enabled.
++ * store() accepts 0 or 1.  0 disables file systems sync and 1 enables it.
+  */
+ bool sync_on_suspend_enabled = !IS_ENABLED(CONFIG_SUSPEND_SKIP_SYNC);
+ 
+@@ -981,16 +1038,26 @@ static const struct attribute_group *attr_groups[] = {
+ struct workqueue_struct *pm_wq;
+ EXPORT_SYMBOL_GPL(pm_wq);
+ 
+-static int __init pm_start_workqueue(void)
++static int __init pm_start_workqueues(void)
+ {
+ 	pm_wq = alloc_workqueue("pm", WQ_FREEZABLE, 0);
++	if (!pm_wq)
++		return -ENOMEM;
+ 
+-	return pm_wq ? 0 : -ENOMEM;
++#if defined(CONFIG_SUSPEND) || defined(CONFIG_HIBERNATION)
++	pm_fs_sync_wq = alloc_ordered_workqueue("pm_fs_sync", 0);
++	if (!pm_fs_sync_wq) {
++		destroy_workqueue(pm_wq);
++		return -ENOMEM;
++	}
++#endif
++
++	return 0;
+ }
+ 
+ static int __init pm_init(void)
+ {
+-	int error = pm_start_workqueue();
++	int error = pm_start_workqueues();
+ 	if (error)
+ 		return error;
+ 	hibernate_image_size_init();
+diff --git a/kernel/power/power.h b/kernel/power/power.h
+index 62a7cb452..331b36816 100644
+--- a/kernel/power/power.h
++++ b/kernel/power/power.h
+@@ -17,6 +17,10 @@ struct swsusp_info {
+ 	unsigned long		size;
+ } __aligned(PAGE_SIZE);
+ 
++#if defined(CONFIG_SUSPEND) || defined(CONFIG_HIBERNATION)
++extern int pm_sleep_fs_sync(void);
++#endif
++
+ #ifdef CONFIG_HIBERNATION
+ /* kernel/power/snapshot.c */
+ extern void __init hibernate_reserved_size_init(void);
