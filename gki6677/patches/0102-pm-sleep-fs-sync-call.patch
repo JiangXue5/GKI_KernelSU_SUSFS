@@ -1,0 +1,78 @@
+From: Samuel Wu <wusamuel@google.com>
+Date: Wed, 19 Nov 2025 09:14:25 -0800
+Subject: [PATCH] BACKPORT: PM: sleep: Call pm_sleep_fs_sync() instead of
+ ksys_sync_helper()
+
+Replace the direct calls to ksys_sync_helper() with the new
+pm_sleep_fs_sync() in suspend and hibernation code paths.
+
+This enables the new mechanism allowing the filesystem sync phase
+to be interrupted.
+
+Suggested-by: Saravana Kannan <saravanak@google.com>
+Signed-off-by: Samuel Wu <wusamuel@google.com>
+Co-developed-by: Rafael J. Wysocki <rafael.j.wysocki@intel.com>
+[ rjw: Subject and changelog edits, tags adjustment ]
+Link: https://patch.msgid.link/20251119171426.4086783-3-wusamuel@google.com
+Signed-off-by: Rafael J. Wysocki <rafael.j.wysocki@intel.com>
+
+Bug: 315272811
+Bug: 479518044
+(cherry picked from commit 8e2d57e6539b1c2c9b76bc1726ac49384a96c04f)
+[Samuel: Resolved minor merge conflict in kernel/power/hibernate.c]
+Signed-off-by: Samuel Wu <wusamuel@google.com>
+Cherrypick-From: https://android-review.googlesource.com/q/commit:ab8dd06cde55677f939e0642df31f06126d507d4
+Merged-In: I08759f0b707f489627370ffda7e95b219b7aaf71
+Change-Id: I08759f0b707f489627370ffda7e95b219b7aaf71
+
+Origin: android.googlesource.com/kernel/common 8308d275f24debbe41e54d535bb986917657745a
+Batch: B-3b (P4 pre-window sweep 2025-04..2026-01) - Class A, apply as-is; predicted ABI delta zero
+
+---
+diff --git a/kernel/power/hibernate.c b/kernel/power/hibernate.c
+index 76dcf2e28..56e505ca9 100644
+--- a/kernel/power/hibernate.c
++++ b/kernel/power/hibernate.c
+@@ -749,7 +749,9 @@ int hibernate(void)
+ 	if (error)
+ 		goto Restore;
+ 
+-	ksys_sync_helper();
++	error = pm_sleep_fs_sync();
++	if (error)
++		goto Exit;
+ 
+ 	error = freeze_processes();
+ 	if (error)
+diff --git a/kernel/power/suspend.c b/kernel/power/suspend.c
+index 8972ebab0..3324d469d 100644
+--- a/kernel/power/suspend.c
++++ b/kernel/power/suspend.c
+@@ -599,7 +599,11 @@ static int enter_state(suspend_state_t state)
+ 
+ 	if (sync_on_suspend_enabled) {
+ 		trace_suspend_resume(TPS("sync_filesystems"), 0, true);
+-		ksys_sync_helper();
++
++		error = pm_sleep_fs_sync();
++		if (error)
++			goto Unlock;
++
+ 		trace_suspend_resume(TPS("sync_filesystems"), 0, false);
+ 	}
+ 
+diff --git a/kernel/power/user.c b/kernel/power/user.c
+index 3a4e70366..8ce24be24 100644
+--- a/kernel/power/user.c
++++ b/kernel/power/user.c
+@@ -278,7 +278,9 @@ static long snapshot_ioctl(struct file *filp, unsigned int cmd,
+ 		if (data->frozen)
+ 			break;
+ 
+-		ksys_sync_helper();
++		error = pm_sleep_fs_sync();
++		if (error)
++			break;
+ 
+ 		error = freeze_processes();
+ 		if (error)
