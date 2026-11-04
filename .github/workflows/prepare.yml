@@ -96,6 +96,16 @@ on:
         required: false
         type: string
         default: "4k"
+      google_backport:
+        description: "Apply the Google upstream backport series (android15-6.6 legs; series branch auto-detected via the gki<digits> naming contract)"
+        required: false
+        type: boolean
+        default: false
+      google_backport_ref:
+        description: "Series source ref in this repo. Empty = AUTO: auto-detect the gki<V><P><sublevel> branch for this leg. A branch/tag/SHA pins an exact series state for reproducible builds."
+        required: false
+        type: string
+        default: ""
 
 jobs:
   generate-matrix:
@@ -348,5 +358,7 @@ jobs:
       allow_version_mismatch: ${{ inputs.allow_version_mismatch }}
       use_cache: ${{ inputs.use_cache }}
       page_size: ${{ inputs.page_size }}
+      google_backport: ${{ inputs.google_backport }}
+      google_backport_ref: ${{ inputs.google_backport_ref }}
       stock_config_artifact: stock-configs-${{ needs.generate-matrix.outputs.version_slug }}
     secrets: inherit
