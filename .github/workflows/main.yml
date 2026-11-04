@@ -118,6 +118,15 @@ on:
         description: "Performance"
         type: boolean
         default: false
+      use_google_backport:
+        description: "Apply the Google upstream backport series (android15-6.6 legs; series branch auto-detected from the gki<digits> naming contract)"
+        type: boolean
+        default: false
+      google_backport_ref:
+        description: "Series source ref in this repo. Empty = AUTO (default): auto-detect the gki<digits> branch matching the leg's sublevel. Set a branch/tag/SHA (e.g. 6.6.77-backport-20261104) to pin an exact series state for reproducible builds."
+        required: false
+        type: string
+        default: ""
       kernel_runner:
         description: "Runner image for the build legs (ubuntu-24.04 = default, ubuntu-latest = newer image A/B)"
         type: choice
@@ -823,6 +832,8 @@ jobs:
       allow_version_mismatch: ${{ inputs.allow_version_mismatch || false }}
       use_cache: ${{ inputs.use_cache }}
       page_size: ${{ inputs.page_size || '4k' }}
+      google_backport: ${{ inputs.use_google_backport || false }}
+      google_backport_ref: ${{ inputs.google_backport_ref }}
     secrets: inherit
 
   build-android16-6-12:
