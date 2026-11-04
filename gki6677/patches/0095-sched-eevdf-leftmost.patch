@@ -1,0 +1,81 @@
+From: jiangyongfu <jiangyongfu@xiaomi.corp-partner.google.com>
+Date: Wed, 5 Nov 2025 14:04:39 +0800
+Subject: [PATCH] ANDROID: if EEVDF scheduling fail, picking leftmost, to avoid
+ NULL pointer.
+
+vruntime_eligible function may always return false, if (vruntime - cfs_rq->min_vruntime) * load overflow.
+lead to pick_eevdf return NULL.
+
+exception:
+[79209.863977][ T2240] Unable to handle kernel NULL pointer dereference at virtual address 00000000000000a0
+[79209.863989][ T2240] Mem abort info:
+[79209.863991][ T2240]   ESR = 0x0000000096000006
+[79209.863994][ T2240]   EC = 0x25: DABT (current EL), IL = 32 bits
+[79209.863996][ T2240]   SET = 0, FnV = 0
+[79209.863998][ T2240]   EA = 0, S1PTW = 0
+[79209.864000][ T2240]   FSC = 0x06: level 2 translation fault
+[79209.864002][ T2240] Data abort info:
+[79209.864004][ T2240]   ISV = 0, ISS = 0x00000006, ISS2 = 0x00000000
+[79209.864006][ T2240]   CM = 0, WnR = 0, TnD = 0, TagAccess = 0
+[79209.864008][ T2240]   GCS = 0, Overlay = 0, DirtyBit = 0, Xs = 0
+[79209.864011][ T2240] user pgtable: 4k pages, 39-bit VAs, pgdp=0000000179365000
+[79209.864013][ T2240] [00000000000000a0] pgd=08000001754ec003, p4d=08000001754ec003, pud=08000001754ec003, pmd=0000000000000000
+[79209.864020][ T2240] Internal error: Oops: 0000000096000006 [#1] PREEMPT SMP
+[79209.864025][ T2240] cpufreq stop DVFS log done
+[79209.864031][ T2240] mtk-dvfsrc 1c00f000.dvfsrc: [Lock] force mode change
+[79209.882240][ T2240] Kernel Offset: 0x0 from 0xffffffc080000000
+[79209.882250][ T2240] PHYS_OFFSET: 0x40000000
+[79209.882254][ T2240] pstate: a34000c5 (NzCv daIF +PAN -UAO)
+[79209.882259][ T2240] pc : [0xffffffc0800fbba4] pick_next_task_fair+0x240/0x670
+[79209.882271][ T2240] lr : [0xffffffc0800fbba4] pick_next_task_fair+0x240/0x670
+[79209.882277][ T2240] sp : ffffffc098a2bae0
+[79209.882280][ T2240] x29: ffffffc098a2bb00 x28: 00000000400004d8
+[79209.882284][ T2240] x27: ffffff81215eacc8 x26: ffffffc082096008
+[79209.882288][ T2240] x25: ffffff81215ea580 x24: 0000000000000080
+[79209.882291][ T2240] x23: 0000000000000000 x22: 0000000000000002
+[79209.882295][ T2240] x21: ffffff81215ea580 x20: ffffff800af5aa00
+[79209.882298][ T2240] x19: ffffff82fbd6f140 x18: ffffffc0820dc5c0
+[79209.882302][ T2240] x17: 000000000016e699 x16: f1f78909fe6f47dc
+[79209.882306][ T2240] x15: 0000000000000000 x14: 0000000000000002
+[79209.882309][ T2240] x13: 000000000016e699 x12: f1f78909fe6f47dc
+[79209.882312][ T2240] x11: 0000000000000000 x10: 0000000000000000
+[79209.882316][ T2240] x9 : 0000000000000000 x8 : 0000000000000000
+[79209.882320][ T2240] x7 : 0000000000000000 x6 : ffffffc098a2b86c
+[79209.882323][ T2240] x5 : ffffffc098a2b870 x4 : ffffffc098a2b874
+[79209.882326][ T2240] x3 : 0000000000000009 x2 : 000009e03fd933be
+[79209.882330][ T2240] x1 : 000009e040bce59a x0 : 0000000000000000
+vruntime = 0x000001FD286B87E3
+cfs_rq->min_vruntime = 0x000009E040BCE59A
+avg_vruntime = 0xF1F78909FE6F47DC
+avg_load = 0x0016E699
+(vruntime - cfs_rq->min_vruntime) * load = (0x000001FD286B87E3-0x000009E040BCE59A)*0x0016E699, so multiplication overflow occurs.
+
+Bug: 440981436
+Bug: 477105787
+Bug: 477802257
+
+Change-Id: I46d3eec7657637a002424627beb5dc447388bad1
+Signed-off-by: jiangyongfu <jiangyongfu@xiaomi.corp-partner.google.com>
+(cherry picked from commit b952463d0db092454c64e326f9dc1d3ea24da9d6)
+
+Origin: android.googlesource.com/kernel/common 793e15e9dee4d752fdde29029ed97ef464389784
+Batch: B-3b (P4 pre-window sweep 2025-04..2026-01) - Class A, apply as-is; predicted ABI delta zero
+
+---
+diff --git a/kernel/sched/fair.c b/kernel/sched/fair.c
+index bd4defd66..c5fc889e2 100644
+--- a/kernel/sched/fair.c
++++ b/kernel/sched/fair.c
+@@ -981,6 +981,12 @@ found:
+ 	if (!best || (curr && entity_before(curr, best)))
+ 		best = curr;
+ 
++	/* EEVDF search sched entity fail, so picking leftmost */
++	if (!best) {
++		best = __pick_first_entity(cfs_rq);
++		printk_deferred("EEVDF scheduling fail, picking leftmost\n");
++	}
++
+ 	return best;
+ }
+ 
