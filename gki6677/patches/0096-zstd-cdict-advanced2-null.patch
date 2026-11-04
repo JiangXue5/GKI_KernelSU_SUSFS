@@ -1,0 +1,37 @@
+From: Sergey Senozhatsky <senozhatsky@chromium.org>
+Date: Mon, 2 Sep 2024 19:55:51 +0900
+Subject: [PATCH] UPSTREAM: lib: zstd: fix null-deref in
+ ZSTD_createCDict_advanced2()
+
+ZSTD_createCDict_advanced2() must ensure that
+ZSTD_createCDict_advanced_internal() has successfully allocated cdict.
+customMalloc() may be called under low memory condition and may be unable
+to allocate workspace for cdict.
+
+Link: https://lkml.kernel.org/r/20240902105656.1383858-4-senozhatsky@chromium.org
+Bug: 471368115
+Change-Id: I2eb92bd3c1d8bc468c34d2f72b1a8dc4f9d1fbe2
+Signed-off-by: Sergey Senozhatsky <senozhatsky@chromium.org>
+Cc: Nick Terrell <terrelln@fb.com>
+Cc: Minchan Kim <minchan@kernel.org>
+Signed-off-by: Andrew Morton <akpm@linux-foundation.org>
+Signed-off-by: Richard Chang <richardycc@google.com>
+(cherry picked from commit 8de063eba38c3e04e85c25a949d61d9822f25556)
+
+Origin: android.googlesource.com/kernel/common 1af523774cc1ca21e02dd7829e18d00e32c7a9b1
+Batch: B-3b (P4 pre-window sweep 2025-04..2026-01) - Class A, apply as-is; predicted ABI delta zero
+
+---
+diff --git a/lib/zstd/compress/zstd_compress.c b/lib/zstd/compress/zstd_compress.c
+index f620cafca..16bb995bc 100644
+--- a/lib/zstd/compress/zstd_compress.c
++++ b/lib/zstd/compress/zstd_compress.c
+@@ -4810,6 +4810,8 @@ ZSTD_CDict* ZSTD_createCDict_advanced2(
+                         dictLoadMethod, cctxParams.cParams,
+                         cctxParams.useRowMatchFinder, cctxParams.enableDedicatedDictSearch,
+                         customMem);
++    if (!cdict)
++        return NULL;
+ 
+     if (ZSTD_isError( ZSTD_initCDict_internal(cdict,
+                                     dict, dictSize,
