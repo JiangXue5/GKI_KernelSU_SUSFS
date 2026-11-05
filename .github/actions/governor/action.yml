@@ -87,9 +87,51 @@ runs:
           exit 1
         fi
 
+    - name: 'Inject Bara-no-Seidou Governor'
+      shell: bash
+      run: |
+        set -euo pipefail
+        TARGET_DIR="$GITHUB_WORKSPACE/kernel/common"
+
+        # Bara-no-Seidou consumes sched_gaming_active, defined by the
+        # rfx_gki510_compat shim (vorpal commit). Skip gracefully when the
+        # shim is not part of this action (vorpal feature reverted).
+        if [ ! -f "${{ github.action_path }}/patches/vorpal/rfx_gki510_compat.c" ]; then
+          echo "WARNING: rfx_gki510_compat.c (compat shim, vorpal commit) not found - Bara-no-Seidou needs its sched_gaming_active; SKIPPING Bara-no-Seidou injection." >&2
+          exit 0
+        fi
+
+        mkdir -p "$TARGET_DIR/kernel/sched"
+        cp "${{ github.action_path }}/patches/bara-no-seidou/cpufreq_bara_no_seidou.c" "$TARGET_DIR/kernel/sched/cpufreq_bara_no_seidou.c"
+
+        if ! grep -q "cpufreq_bara_no_seidou.o" "$TARGET_DIR/kernel/sched/Makefile"; then
+          echo 'obj-$(CONFIG_CPU_FREQ_GOV_BARA_NO_SEIDOU) += cpufreq_bara_no_seidou.o' >> "$TARGET_DIR/kernel/sched/Makefile"
+        fi
+
+        if ! grep -q "config CPU_FREQ_GOV_BARA_NO_SEIDOU" "$TARGET_DIR/drivers/cpufreq/Kconfig"; then
+          printf "\nconfig CPU_FREQ_GOV_BARA_NO_SEIDOU\n" >> "$TARGET_DIR/drivers/cpufreq/Kconfig"
+          printf "\ttristate \"'bara-no-seidou' cpufreq governor\"\n" >> "$TARGET_DIR/drivers/cpufreq/Kconfig"
+          printf "\tdepends on CPU_FREQ && SMP && INPUT\n" >> "$TARGET_DIR/drivers/cpufreq/Kconfig"
+          printf "\tselect CPU_FREQ_GOV_ATTR_SET\n" >> "$TARGET_DIR/drivers/cpufreq/Kconfig"
+          printf "\thelp\n" >> "$TARGET_DIR/drivers/cpufreq/Kconfig"
+          printf "\t  'bara-no-seidou' is a schedutil-based governor tuned for\n" >> "$TARGET_DIR/drivers/cpufreq/Kconfig"
+          printf "\t  battery efficiency with an automatic gaming-mode switch,\n" >> "$TARGET_DIR/drivers/cpufreq/Kconfig"
+          printf "\t  touch-boost smoothing, and PSI-aware tuning.\n" >> "$TARGET_DIR/drivers/cpufreq/Kconfig"
+        fi
+
+        if ! grep -q "cpufreq_bara_no_seidou.o" "$TARGET_DIR/kernel/sched/Makefile"; then
+          echo "ERROR: failed to wire cpufreq_bara_no_seidou.o into sched/Makefile" >&2
+          exit 1
+        fi
+        if ! grep -q "config CPU_FREQ_GOV_BARA_NO_SEIDOU" "$TARGET_DIR/drivers/cpufreq/Kconfig"; then
+          echo "ERROR: failed to inject CPU_FREQ_GOV_BARA_NO_SEIDOU Kconfig entry" >&2
+          exit 1
+        fi
+
     - name: Enable Governors
       uses: ./.github/actions/set-kernel-config
       with:
         config_list: |
           CONFIG_CPU_FREQ_GOV_REFLEX=y
           CONFIG_CPU_FREQ_GOV_VORPAL=y
+          CONFIG_CPU_FREQ_GOV_BARA_NO_SEIDOU=y
