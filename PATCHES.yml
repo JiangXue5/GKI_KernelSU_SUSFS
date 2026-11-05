@@ -1,0 +1,127 @@
+# PATCHES.yml — single pointer / enablement list for the `feature/patches` series
+# ================================================================================
+# Each entry maps 1:1 to a commit on the `feature/patches` branch (based on
+# `main-chandr1000`). Disable a feature:
+#
+#   * NOW (before CI wiring):  `git revert <commit>` — the revert cleanly removes
+#     exactly that feature (one commit per feature by design).
+#   * AFTER CI wiring:         flip `enabled: false` here (or gate the workflow
+#     step / dispatch input) — this file stays the documentation of record.
+#
+# Re-enable: revert the revert, or flip back to `true`.
+#
+
+series:
+  branch: feature/patches
+  base: main-chandr1000
+  delivery: feature_patches.mbox          # apply with: git am --3way feature_patches.mbox
+  ci_wiring: deferred                     # build.yml steps to be added in a later series
+
+patches:
+  - id: bore-scheduler                    # commit 1
+    commit_subject: "feat(bore): BORE scheduler for all GKI families (vendored)"
+    enabled: true
+    title: BORE scheduler (Burst-Oriented Response Enhancer)
+    author: Masahito Suzuki (firelzrd)    # https://github.com/firelzrd/bore-scheduler
+    port: WildKernels GKI_KernelSU_SUSFS (27cb8b3e, be224605, c606cc2a, eba7eac4, c2f54d01, 06488106)
+    files: [.github/actions/bore/, .github/scripts/bore*.py]
+    kernels: [5.10, 5.15, 6.1, 6.6, 6.12] # 6.6 variant selectable: 5.9.6 (default) | 5.1.0
+    config: [CONFIG_SCHED_BORE=y, CONFIG_MIN_BASE_SLICE_NS=2000000]
+    notes: >
+      5.10/5.15/6.1 use the author's pinned legacy patches; 6.6 uses the two
+      vendored patches (variant input); 6.12 resolves the newest patch from the
+      author's patches/stable/ at build time (retry + git fallback). KMI-safe:
+      burst state is relocated into ANDROID_KABI_RESERVE slots by the vendored
+      bore*.py scripts so stock vendor modules keep working.
+
+  - id: governor-reflex                   # commit 2
+    commit_subject: "feat(governor): add Reflex governor (schedutil + idle accounting)"
+    enabled: true
+    title: Reflex CPUFreq governor
+    author: Masahito Suzuki (firelzrd)    # https://github.com/firelzrd/reflex
+    port: Nao-YM/GKI_KernelSU_SUSFS (a60fcf3f)
+    files: [.github/actions/governor/patches/reflex/]
+    kernels: [5.10, 5.15, 6.1, 6.6, 6.12] # 5.15 + 6.6 proven in upstream CI; others probe on first run
+    config: [CONFIG_CPU_FREQ_GOV_REFLEX=y]
+    depends_on: []                        # standalone — no shim dependency
+    notes: >
+      No CONFIG_CPU_FREQ_DEFAULT_GOV_REFLEX on purpose: proven not to work
+      upstream and reverted there. The embedded copy is the earlier
+      hispeed-blend generation, not firelzrd v0.4.0.
+
+  - id: governor-vorpal                   # commit 3
+    commit_subject: "feat(governor): add Vorpal governor + GKI util compat shim"
+    enabled: true
+    title: Vorpal CPUFreq Governor v2.0 (Perfect Gaming & Thermal Edition)
+    author: Templar Dev (Steambot12)      # via kusonekoworld-max/MomenToMoiX-Kernel-GKI
+    port: Nao-YM/GKI_KernelSU_SUSFS (a60fcf3f)
+    files: [.github/actions/governor/patches/vorpal/]
+    kernels: [5.10, 5.15, 6.1, 6.6, 6.12] # 5.15 + 6.6 proven; others probe (D3: proven shim kept)
+    config: [CONFIG_CPU_FREQ_GOV_VORPAL=y]
+    provides: [sched_gaming_active, rfx_get_util_gki510, rfx_dl_bw_exceeded_gki510]
+    depends_on: []
+    notes: >
+      rfx_gki510_compat.c (obj-y, always built) is the SOLE definer of
+      sched_gaming_active in this tree — Bara-no-Seidou and the fair.c gaming
+      bias consume it. Disabling vorpal disables both of those automatically
+      (their steps warn + skip).
+
+  - id: governor-bara-no-seidou           # commit 4
+    commit_subject: "feat(governor): add Bara-no-Seidou governor (battery + auto gaming)"
+    enabled: true
+    title: Bara-no-Seidou CPUFreq governor (battery + auto gaming mode)
+    author: kusonekoworld-max (koneko_dev) # MomenToMoiX-Kernel-GKI, intro aeacdbf 2026-07-30
+    port: Nao-YM/GKI_KernelSU_SUSFS (f1c0fc5f)
+    files: [.github/actions/governor/patches/bara-no-seidou/]
+    kernels: [5.10, 5.15, 6.1, 6.6, 6.12] # 5.15 + 6.6 proven; others probe
+    config: [CONFIG_CPU_FREQ_GOV_BARA_NO_SEIDOU=y]
+    depends_on: [governor-vorpal]         # needs sched_gaming_active from the shim
+    notes: >
+      Injection warns + skips if the shim is absent — keep vorpal enabled.
+
+  - id: fair-gaming-bias                  # commit 5
+    commit_subject: "feat(sched): fair.c gaming-mode bias via sched_gaming_active (best-effort)"
+    enabled: true
+    title: CFS gaming-mode bias (vruntime stretch / preemption / migration isolation)
+    author: MomenToMoiX project (koneko_dev)
+    port: Nao-YM/GKI_KernelSU_SUSFS (a60fcf3f)
+    files: [.github/actions/governor/action.yml (fair.c step)]
+    kernels: [5.10, 5.15, 6.1, 6.6, 6.12] # best-effort: auto-skips on non-matching trees (D2)
+    depends_on: [governor-vorpal]
+    notes: >
+      All-or-nothing per file: the five injections run against a temp copy and
+      only replace fair.c when every marker matches; otherwise the step warns
+      and skips. Governors stay fully functional without it. Stacks cleanly
+      with BORE (apply bore first — both touch kernel/sched/fair.c).
+
+  - id: momentomoix-driver                # commit 6
+    commit_subject: "feat(driver): MomenToMoiX (tenebrion) screen/thermal QoS driver"
+    enabled: true
+    title: MomenToMoiX (Tenebrion) screen/charging/thermal QoS driver
+    author: "koneko_dev; Tenebrion logic + SELinux rules: Kanagawa Yamada (LoggingNewMemory)"
+    port: Nao-YM/GKI_KernelSU_SUSFS (69a2d582, 25ae398b)
+    files: [.github/actions/momentx/]
+    kernels: [5.10, 5.15, 6.1, 6.6, 6.12]
+    depends_on: []
+    notes: >
+      Includes the MGLRU/KSM/zram-zstd/zsmalloc-stats/BFQ/PSI/uclamp config
+      block. SELinux rules inject into a KernelSU-family rules.c (ksu_allow
+      table); on other root flavors the step warns + skips (D4) and the driver
+      still builds.
+
+  # Commits 7 (per-governor enable inputs) and 8 (this file + THIRD_PARTY_NOTICES.md)
+  # are series plumbing and have no enable/disable semantics of their own.
+
+attribution:
+  license: GPL-2.0
+  policy: >
+    Every vendored file keeps its original copyright header byte-for-byte;
+    original commit subjects are quoted verbatim in the series' commit
+    messages; full credits also live in THIRD_PARTY_NOTICES.md.
+  authors:
+    - "Masahito Suzuki (firelzrd) — BORE scheduler; Reflex governor"
+    - "Templar Dev (Steambot12) — Vorpal governor"
+    - "kusonekoworld-max (koneko_dev) — Bara-no-Seidou governor; MomenToMoiX project; fair.c gaming bias"
+    - "Kanagawa Yamada (LoggingNewMemory) — Tenebrion logic + SELinux rules"
+    - "TheWildJames (WildKernels) — BORE composite-action port"
+    - "Nao-YM — composite-action packaging layer"
