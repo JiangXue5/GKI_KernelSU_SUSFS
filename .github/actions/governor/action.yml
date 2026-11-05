@@ -27,8 +27,69 @@ runs:
           printf "\t  featuring idle-time accounting and PELT-complementary exponential decay.\n" >> "$TARGET_DIR/drivers/cpufreq/Kconfig"
         fi
 
+    - name: 'Inject Vorpal Governor + GKI510 Compat'
+      shell: bash
+      run: |
+        set -euo pipefail
+        TARGET_DIR="$GITHUB_WORKSPACE/kernel/common"
+
+        mkdir -p "$TARGET_DIR/kernel/sched"
+        cp "${{ github.action_path }}/patches/vorpal/cpufreq_vorpal.c" "$TARGET_DIR/kernel/sched/cpufreq_vorpal.c"
+        cp "${{ github.action_path }}/patches/vorpal/rfx_gki510_compat.c" "$TARGET_DIR/kernel/sched/rfx_gki510_compat.c"
+
+        if ! grep -q "cpufreq_vorpal.o" "$TARGET_DIR/kernel/sched/Makefile"; then
+          echo 'obj-$(CONFIG_CPU_FREQ_GOV_VORPAL) += cpufreq_vorpal.o' >> "$TARGET_DIR/kernel/sched/Makefile"
+        fi
+
+        if ! grep -q "rfx_gki510_compat.o" "$TARGET_DIR/kernel/sched/Makefile"; then
+          echo 'obj-y += rfx_gki510_compat.o' >> "$TARGET_DIR/kernel/sched/Makefile"
+        fi
+
+        if ! grep -q "config CPU_FREQ_GOV_VORPAL" "$TARGET_DIR/drivers/cpufreq/Kconfig"; then
+          printf "\nconfig CPU_FREQ_GOV_VORPAL\n" >> "$TARGET_DIR/drivers/cpufreq/Kconfig"
+          printf "\ttristate \"'vorpal' cpufreq governor\"\n" >> "$TARGET_DIR/drivers/cpufreq/Kconfig"
+          printf "\tdepends on CPU_FREQ && SMP\n" >> "$TARGET_DIR/drivers/cpufreq/Kconfig"
+          printf "\tselect CPU_FREQ_GOV_ATTR_SET\n" >> "$TARGET_DIR/drivers/cpufreq/Kconfig"
+          printf "\thelp\n" >> "$TARGET_DIR/drivers/cpufreq/Kconfig"
+          printf "\t  'vorpal' is a schedutil-based governor tuned for\n" >> "$TARGET_DIR/drivers/cpufreq/Kconfig"
+          printf "\t  gaming/thermal-aware dual-profile operation.\n" >> "$TARGET_DIR/drivers/cpufreq/Kconfig"
+        fi
+
+    - name: 'Fix Vorpal Input-Handler Init Bug'
+      shell: bash
+      working-directory: ${{ github.workspace }}/kernel/common
+      run: |
+        set -euo pipefail
+        VORPAL_C="kernel/sched/cpufreq_vorpal.c"
+
+        if ! grep -q "bool input_ok;" "$VORPAL_C"; then
+          perl -0pi -e 's{(static int __init vorpal_gov_init\(void\)\n\{\n\tint ret;\n)}{$1\tbool input_ok;\n}' "$VORPAL_C"
+        fi
+
+        if ! grep -q "input_ok = !input_register_handler" "$VORPAL_C"; then
+          perl -0pi -e 's{\tif \(input_register_handler\(&rfx_input_handler\)\)\n\t\tpr_warn\("vorpal: input handler register failed \(touch boost off\)\\n"\);}{\tinput_ok = !input_register_handler(&rfx_input_handler);\n\tif (!input_ok)\n\t\tpr_warn("vorpal: input handler register failed (touch boost off)\\n");}' "$VORPAL_C"
+        fi
+
+        if ! grep -q "if (input_ok)" "$VORPAL_C"; then
+          perl -0pi -e 's{\tret = cpufreq_register_governor\(&vorpal_gov\);\n\tif \(ret\) \{\n\t\tinput_unregister_handler\(&rfx_input_handler\);\n\t\tcancel_delayed_work_sync\(&rfx_thermal_work\);\n\t\}}{\tret = cpufreq_register_governor(&vorpal_gov);\n\tif (ret) \{\n\t\tif (input_ok)\n\t\t\tinput_unregister_handler(&rfx_input_handler);\n\t\tcancel_delayed_work_sync(&rfx_thermal_work);\n\t\}}' "$VORPAL_C"
+        fi
+
+        if ! grep -q "bool input_ok;" "$VORPAL_C"; then
+          echo "ERROR: failed to inject 'bool input_ok;' into vorpal_gov_init()" >&2
+          exit 1
+        fi
+        if ! grep -q "input_ok = !input_register_handler" "$VORPAL_C"; then
+          echo "ERROR: failed to patch input_register_handler() call in vorpal_gov_init()" >&2
+          exit 1
+        fi
+        if ! grep -q "if (input_ok)" "$VORPAL_C"; then
+          echo "ERROR: failed to guard input_unregister_handler() in vorpal_gov_init() error path" >&2
+          exit 1
+        fi
+
     - name: Enable Governors
       uses: ./.github/actions/set-kernel-config
       with:
         config_list: |
           CONFIG_CPU_FREQ_GOV_REFLEX=y
+          CONFIG_CPU_FREQ_GOV_VORPAL=y
