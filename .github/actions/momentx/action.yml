@@ -1,0 +1,94 @@
+name: 'Inject MomenToMoiX Drivers'
+description: 'Inject MomenToMoiX drivers'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Enable Performance & Battery Configs for MomenToMoiX
+      uses: ./.github/actions/set-kernel-config
+      with:
+        config_list: |
+          CONFIG_ZRAM=m
+          CONFIG_ZRAM_DEF_COMP_ZSTD=y
+          CONFIG_ZSMALLOC=m
+          CONFIG_ZSMALLOC_STAT=y
+          CONFIG_LRU_GEN=y
+          CONFIG_LRU_GEN_ENABLED=y
+          CONFIG_LRU_GEN_STATS=n
+          CONFIG_COMPACTION=y
+          CONFIG_MIGRATION=y
+          CONFIG_KSM=y
+          CONFIG_TRANSPARENT_HUGEPAGE=y
+          CONFIG_IOSCHED_BFQ=y
+          CONFIG_BFQ_GROUP_IOSCHED=y
+          CONFIG_MQ_IOSCHED_DEADLINE=y
+          CONFIG_PREEMPT=y
+          CONFIG_PSI=y
+          CONFIG_PREEMPT_NONE=n
+          CONFIG_PREEMPT_VOLUNTARY=n
+          CONFIG_HIGH_RES_TIMERS=y
+          CONFIG_TCP_FASTOPEN=y
+          CONFIG_CPU_IDLE=y
+          CONFIG_CPU_IDLE_GOV_MENU=y
+          CONFIG_CPU_IDLE_GOV_TEO=y
+          CONFIG_WQ_POWER_EFFICIENT_DEFAULT=y
+          CONFIG_PM_WAKELOCKS=y
+          CONFIG_PM_WAKELOCKS_LIMIT=100
+          CONFIG_PM_WAKELOCKS_GC=y
+          CONFIG_SUSPEND=y
+          CONFIG_DEVFREQ_GOV_PERFORMANCE=y
+          CONFIG_DEVFREQ_GOV_PASSIVE=y
+          CONFIG_UCLAMP_TASK=y
+          CONFIG_UCLAMP_TASK_GROUP=y
+          CONFIG_CMA=y
+          CONFIG_DMA_CMA=y
+          CONFIG_MQ_IOSCHED_KYBER=y
+          CONFIG_SUSPEND_FREEZER=y
+          CONFIG_CPU_FREQ_GOV_SCHEDUTIL=y
+          CONFIG_ENERGY_MODEL=y
+          CONFIG_SCHED_MC=y
+          CONFIG_NO_HZ_IDLE=y
+          CONFIG_NO_HZ_FULL=n
+
+
+    - name: 'Inject MomenToMoiX Driver'
+      shell: bash
+      run: |
+        set -euo pipefail
+        TARGET_DIR="$GITHUB_WORKSPACE/kernel/common"
+        mkdir -p "$TARGET_DIR/drivers/momx"
+        cd "${{ github.action_path }}/patches/tenebrion"
+        cp MomenToMoiX.c "$TARGET_DIR/drivers/momx/MomenToMoiX.c"
+        cp Makefile "$TARGET_DIR/drivers/momx/Makefile"
+        if ! grep -q "momx/" "$TARGET_DIR/drivers/Makefile"; then
+          echo "obj-y += momx/" >> "$TARGET_DIR/drivers/Makefile"
+        fi
+
+        echo "✅ Inject MomenToMoiX Driver successfully."
+
+    - name: 'Inject MomenToMoiX SELinux Rules'
+      shell: bash
+      working-directory: ${{ github.workspace }}/kernel/common
+      run: |
+        set -euo pipefail
+        SELINUX_PATCH_PATH="${{ github.action_path }}/patches/tenebrion/selinux.sh"
+        cp "$SELINUX_PATCH_PATH" ./selinux.sh
+        chmod +x ./selinux.sh
+        RULES_FILE=$(find -L drivers/kernelsu -type f -name "rules.c" 2>/dev/null | head -1 || true)
+        if [[ -z "$RULES_FILE" ]]; then
+          # '|| true' matters: a no-match grep exits 1, and under
+          # 'set -euo pipefail' the assignment would abort the script
+          # before the warn+skip guard below is ever reached.
+          RULES_FILE=$(grep -rl "ksu_allow" . --include="rules.c" 2>/dev/null | head -1 || true)
+        fi
+        if [[ -z "$RULES_FILE" ]]; then
+          # D4 (plan): warn + skip instead of failing the job. The SELinux
+          # rules need a KernelSU-family rules.c (ksu_allow table); on other
+          # root flavors the MomenToMoiX driver still builds - manager-side
+          # rules may then be needed for full function.
+          echo "WARNING: no KernelSU-family rules.c found in this tree (root flavor without a ksu_allow table?); SKIPPING MomenToMoiX SELinux rules." >&2
+          echo "         The MomenToMoiX driver is still built; manager-side rules may be needed for full function." >&2
+          exit 0
+        fi
+        export SELINUX_RULES_C="$RULES_FILE"
+        ./selinux.sh
