@@ -1,0 +1,232 @@
+name: 'Apply Feature Patches'
+description: >-
+  Manifest-driven applier for the feature/patches series (plan v3.0.0 §3.3,
+  decisions D15–D19). Fetches the content branch into RUNNER_TEMP (never
+  `git switch` the workspace — RC2), parses PATCHES.yml (the operative
+  manifest), gates entries on the kernel tree's own Makefile version (D18),
+  applies patches with strict `git apply --check` + `git apply` (D15) and
+  runs kind: script entries, then emits the CONFIG_* fragment for the
+  existing set-kernel-config step (D17).
+
+inputs:
+  manifest_ref:
+    description: 'Content branch or pinned SHA. Float `feature/patches` for nightly; pin a SHA for release-grade runs.'
+    required: false
+    default: 'feature/patches'
+  features:
+    description: '`default` (manifest enabled: decides) | `off` (skip everything) | comma-list of ids to force-enable'
+    required: false
+    default: 'default'
+  strict:
+    description: '`false` downgrades every apply failure to warn+skip (escape hatch, logged loudly).'
+    required: false
+    default: 'true'
+  target_dir:
+    description: 'Kernel tree root the series applies against.'
+    required: false
+    default: '${{ github.workspace }}/kernel/common'
+
+outputs:
+  config_fragment:
+    description: 'Concatenated CONFIG_* lines of every applied entry (D17).'
+    value: ${{ steps.apply.outputs.config_fragment }}
+  applied:
+    description: 'Comma-list of applied entry ids.'
+    value: ${{ steps.apply.outputs.applied }}
+
+runs:
+  using: composite
+  steps:
+    - name: 'Fetch content branch (sparse, into RUNNER_TEMP)'
+      shell: bash
+      env:
+        MANIFEST_REF: ${{ inputs.manifest_ref }}
+      run: |
+        set -euo pipefail
+        CONTENT="$RUNNER_TEMP/feature-patches"
+        rm -rf "$CONTENT"
+        git clone -q --depth=1 --filter=blob:none --no-checkout \
+          "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git" "$CONTENT"
+        git -C "$CONTENT" fetch -q --depth=1 origin "$MANIFEST_REF"
+        git -C "$CONTENT" checkout -q --detach FETCH_HEAD
+        echo "content: $MANIFEST_REF @ $(git -C "$CONTENT" rev-parse --short=12 HEAD)"
+        # artifacts land in the workspace so the workflow's always() upload
+        # step can ship them even when this action fails strict
+        mkdir -p "${{ github.workspace }}/patch-apply-logs"
+
+    - name: 'Parse manifest, resolve plan, apply series'
+      id: apply
+      shell: bash
+      env:
+        FEATURES: ${{ inputs.features }}
+        STRICT: ${{ inputs.strict }}
+        TARGET_DIR: ${{ inputs.target_dir }}
+      run: |
+        set -euo pipefail
+        CONTENT="$RUNNER_TEMP/feature-patches"
+        LOGDIR="${{ github.workspace }}/patch-apply-logs"
+        python3 -c 'import yaml' 2>/dev/null || pip install -q pyyaml
+        export CONTENT LOGDIR
+        python3 <<'PYEOF'
+        import os, subprocess, sys, glob, yaml
+
+        CONTENT = os.environ["CONTENT"]
+        LOGDIR  = os.environ["LOGDIR"]
+        os.makedirs(LOGDIR, exist_ok=True)
+        TARGET  = os.environ["TARGET_DIR"]
+        FEATURES = os.environ.get("FEATURES", "default").strip() or "default"
+        STRICT  = os.environ.get("STRICT", "true") == "true"
+
+        def git(args, cwd, check=True):
+            r = subprocess.run(["git"] + args, cwd=cwd, capture_output=True, text=True)
+            if check and r.returncode != 0:
+                raise RuntimeError(f"git {' '.join(args)}: {r.stderr.strip()[:400]}")
+            return r
+
+        def out(s): print(s, flush=True)
+        def warn(s): print(f"::warning::{s}", flush=True)
+
+        mfile = os.path.join(CONTENT, "PATCHES.yml")
+        if not os.path.exists(mfile):
+            sys.exit("FATAL: PATCHES.yml not found on the content ref (fail-loud, RC3)")
+        manifest = yaml.safe_load(open(mfile))
+        entries = manifest.get("patches") or []
+        if not entries:
+            sys.exit("FATAL: PATCHES.yml has no patches: entries")
+
+        # D18: version gate from the tree being built
+        mk = os.path.join(TARGET, "Makefile")
+        def ver(key):
+            for line in open(mk):
+                if line.startswith(key):
+                    return line.split("=")[1].strip()
+            return "?"
+        kver = f"{ver('VERSION')}.{ver('PATCHLEVEL')}"
+        if "?" in kver:
+            sys.exit(f"FATAL: cannot parse VERSION/PATCHLEVEL from {mk}")
+        out(f"kernel tree: {kver} @ {TARGET}")
+
+        ids = [e["id"] for e in entries]
+        if len(set(ids)) != len(ids):
+            sys.exit("FATAL: duplicate entry ids in PATCHES.yml")
+
+        # parse-time validation (plan §3.2): manifest order == apply order, so
+        # every depends_on id must PRECEDE its dependent in the list
+        idx = {eid: i for i, eid in enumerate(ids)}
+        for e in entries:
+            for d in e.get("depends_on") or []:
+                if d not in idx:
+                    sys.exit(f"FATAL: {e['id']} depends on unknown id {d}")
+                if idx[d] >= idx[e["id"]]:
+                    sys.exit(f"FATAL: {e['id']} depends on {d}, which does not precede it in list order")
+
+        # resolve the active set
+        if FEATURES == "off":
+            active = []
+        elif FEATURES == "default":
+            active = [e["id"] for e in entries if e.get("enabled", True)]
+        else:
+            want = {x.strip() for x in FEATURES.split(",") if x.strip()}
+            unknown = want - set(ids)
+            if unknown:
+                sys.exit(f"FATAL: unknown feature id(s): {sorted(unknown)}")
+            active = [e["id"] for e in entries
+                      if e.get("enabled", True) or e["id"] in want]
+
+        verdict = {}   # id -> verdict string, set as encountered
+        for e in entries:
+            eid = e["id"]
+            if eid not in active:
+                verdict[eid] = "skip: disabled (manifest enabled: false)"
+                continue
+            fam = e.get("kernels") or []
+            # YAML floats would collapse 5.10 -> 5.1; the operative manifest
+            # quotes kernel families — float values are formatted defensively
+            fams = [(f"{k:g}" if isinstance(k, float) else str(k)) for k in fam]
+            if fam and kver not in fams:
+                verdict[eid] = f"skip: kernels gate ({kver} not in {fams})"
+
+        frag, applied, failures = [], [], []
+        rows = []
+        for e in entries:
+            eid = e["id"]
+            if verdict.get(eid) is not None:
+                rows.append((eid, verdict[eid]))
+                continue
+            # deps resolved by list order: applied, or kernels-off (fine),
+            # anything else (failed/skipped) skips the dependent loudly
+            dep_bad = None
+            for d in e.get("depends_on") or []:
+                dv = verdict.get(d, "")
+                if dv != "applied" and not dv.startswith("skip: kernels gate"):
+                    dep_bad = f"skip: dep {d}: {dv}"
+            if dep_bad:
+                verdict[eid] = dep_bad
+                warn(f"{eid} {dep_bad}")
+                rows.append((eid, verdict[eid]))
+                continue
+            kind = e.get("kind", "patch")
+            try:
+                if kind == "patch":
+                    p = os.path.join(CONTENT, e["patch"])
+                    if not os.path.exists(p):
+                        raise RuntimeError(f"patch file missing: {e['patch']}")
+                    git(["apply", "--check", p], TARGET)          # D15 preflight
+                    git(["apply", p], TARGET)
+                elif kind == "script":
+                    s = os.path.join(CONTENT, e["script"])
+                    if not os.path.exists(s):
+                        raise RuntimeError(f"script missing: {e['script']}")
+                    r = subprocess.run(["bash", s, TARGET], capture_output=True, text=True)
+                    # relay script chatter (warnings are contract - RC3 lesson)
+                    for stream in (r.stdout, r.stderr):
+                        for ln in stream.splitlines():
+                            if any(k in ln for k in ("WARNING", "ERROR", "===" , "SKIP", "skip")):
+                                out(f"    [{e['id']}] {ln.strip()[:180]}")
+                    if r.returncode != 0:
+                        raise RuntimeError(f"script failed rc={r.returncode}: {r.stderr.strip()[:400]}")
+                else:
+                    raise RuntimeError(f"unknown kind: {kind}")
+                verdict[eid] = "applied"
+                applied.append(eid)
+                frag += [c for c in (e.get("config") or [])]
+            except (RuntimeError, subprocess.CalledProcessError) as ex:
+                msg = str(ex)
+                log = os.path.join(LOGDIR, f"{eid}.log")
+                open(log, "w").write(msg + "\n")
+                # sweep any .rej produced into the artifact dir
+                for rej in glob.glob(os.path.join(TARGET, "**", "*.rej"), recursive=True):
+                    dst = os.path.join(LOGDIR, os.path.basename(rej))
+                    if os.path.exists(rej) and not os.path.exists(dst):
+                        subprocess.run(["cp", rej, dst])
+                be = e.get("best_effort", False)
+                if be and STRICT:
+                    verdict[eid] = f"FAILED (best_effort: warn + skip): {msg[:120]}"
+                    warn(f"{eid}: {msg}")
+                else:
+                    verdict[eid] = f"FAILED (strict): {msg[:120]}"
+                    failures.append(eid)
+            rows.append((eid, verdict[eid]))
+
+        # step summary (silence is a bug — RC3 lesson)
+        lines = ["## Feature patches (manifest-driven)", "",
+                 "| id | verdict |", "|---|---|"]
+        for eid, v in rows:
+            mark = ("✅" if v == "applied"
+                    else "⚠️" if v.startswith("FAILED (best_effort")
+                    else "❌" if v.startswith("FAILED") else "⏭️")
+            lines.append(f"| {mark} {eid} | {v} |")
+        lines += ["", f"kernel {kver} · mode `{FEATURES}` · strict={STRICT} · applied {len(applied)}/{len(rows)}"]
+        with open(os.environ.get("GITHUB_STEP_SUMMARY", "/dev/null"), "a") as fh:
+            fh.write("\n".join(lines) + "\n")
+        for eid, v in rows:
+            out(f"  {eid}: {v}")
+
+        gout = os.environ.get("GITHUB_OUTPUT")
+        if gout:
+            with open(gout, "a") as fh:
+                fh.write(f"config_fragment={' '.join(frag)}\n")
+                fh.write(f"applied={','.join(applied)}\n")
+        if failures:
+            sys.exit(f"FATAL: strict apply failure(s): {', '.join(failures)} — see patch-apply-logs artifact + summary")
+        PYEOF
