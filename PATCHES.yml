@@ -65,6 +65,10 @@ patches:
       serves both the D19 base and the runtime tree (both verified).
       task_struct slot map: 1/2 BORE group_burst, 3/4/5 free, 6/7/8
       DroidSpaces sysvipc; sched_entity 1-4 BORE.
+      ROUND-3 HARDENING (run 42300760345): bore.c parsed the private
+      sched.h with no direct cputime.h include — it compiled only via
+      transitive-include luck on every leg so far. cputime.h hoisted
+      above sched.h (fair.c order), matching the governor TUs.
 
   - id: bore-scheduler-66-510            # 6.6 ALTERNATIVE variant (5.1.0 generation)
     enabled: false                       # A/B: enable this, disable bore-scheduler
@@ -162,7 +166,9 @@ patches:
       No CONFIG_CPU_FREQ_DEFAULT_GOV_REFLEX on purpose: proven not to work
       upstream and reverted there. The embedded copy is the earlier
       hispeed-blend generation, not firelzrd v0.4.0. cputime.h include-order
-      fix (aacfc1b9 + 4d26dddb) folded. Makefile insert re-anchored between
+      fix (aacfc1b9 + 4d26dddb) folded — re-folded after run 42300760345:
+      the v3 Phase A regen had silently dropped it and cpufreq_reflex.o
+      only compiled via transitive-include luck. Makefile insert re-anchored between
       build_policy/build_utility (was: EOF app after bore.o - a bore failure
       used to cascade here; run 42248382967).
 
@@ -187,6 +193,12 @@ patches:
       re-anchored between fair.o/build_policy and Kconfig block moved
       inside the menu (endif|endmenu) - both were EOF-coupled to reflex's
       apply state (run 42248382967 cascade).
+      INCIDENT RUN 42300760345 (round 3): the Phase A regen rebuilt this
+      patch from a pre-fix source snapshot, re-breaking the
+      cputime.h-before-sched.h order — the obj-y shim died at
+      sched.h:3349 (implicit account_group_exec_runtime) plus the
+      slash-star in the old comment glob under -Werror. Re-land of
+      1f085491, blob-identical post-image (debc7491).
 
   # --- F4: Bara-no-Seidou governor -------------------------------------------
   - id: governor-bara-no-seidou
@@ -206,6 +218,9 @@ patches:
       caused incident round 3. Makefile insert re-anchored between
       core.o/fair.o; the Kconfig block stays after vorpal's (the manifest
       depends_on is intentional - the shim symbol).
+      cputime.h include-order re-land as well (run 42300760345): the
+      Phase A regen lost it here too; compiled only via transitive
+      include luck before the fix.
 
   # --- F6: fair.c gaming bias -------------------------------------------------
   - id: fair-gaming-bias

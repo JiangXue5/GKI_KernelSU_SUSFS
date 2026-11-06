@@ -26,7 +26,7 @@ Plan: integration_plan_feature_patches_v3.0.0.md section 4 (F1).
  kernel/Kconfig.hz          |  17 ++
  kernel/fork.c              |  10 +
  kernel/sched/Makefile      |   1 +
- kernel/sched/bore.c        | 446 +++++++++++++++++++++++++++++++++++++
+ kernel/sched/bore.c        | 447 +++++++++++++++++++++++++++++++++++++
  kernel/sched/core.c        |   6 +
  kernel/sched/debug.c       |  61 ++++-
  kernel/sched/fair.c        |  87 +++++++-
@@ -34,7 +34,7 @@ Plan: integration_plan_feature_patches_v3.0.0.md section 4 (F1).
  kernel/sched/sched.h       |   9 +
  localversion               |   1 +
  scripts/setlocalversion    |   2 +-
- 14 files changed, 736 insertions(+), 6 deletions(-)
+ 14 files changed, 737 insertions(+), 6 deletions(-)
  create mode 100644 include/linux/sched/bore.h
  create mode 100644 kernel/sched/bore.c
  create mode 100644 localversion
@@ -264,10 +264,10 @@ index ff1738c..c375b3f 100644
  obj-$(CONFIG_ANDROID_VENDOR_HOOKS) += vendor_hooks.o
 diff --git a/kernel/sched/bore.c b/kernel/sched/bore.c
 new file mode 100644
-index 0000000..c614aa5
+index 0000000..6f340a8
 --- /dev/null
 +++ b/kernel/sched/bore.c
-@@ -0,0 +1,446 @@
+@@ -0,0 +1,447 @@
 +/*
 + *  Burst-Oriented Response Enhancer (BORE) CPU Scheduler
 + *  Copyright (C) 2021-2024 Masahito Suzuki <firelzrd@gmail.com>
@@ -275,6 +275,7 @@ index 0000000..c614aa5
 +#include <linux/cpuset.h>
 +#include <linux/sched/task.h>
 +#include <linux/sched/bore.h>
++#include <linux/sched/cputime.h>
 +#include "sched.h"
 +
 +#ifdef CONFIG_SCHED_BORE
