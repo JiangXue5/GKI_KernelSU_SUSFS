@@ -29,16 +29,19 @@
  * directory.
  */
 
-#include "sched.h"
-
 /* kernel/sched/sched.h calls account_group_exec_runtime() from the stock
  * update_current_exec_runtime() inline; the definition lives in
- * <linux/sched/cputime.h>, which kernel/sched/*.c include on their own
- * (see fair.c) — sched.h itself does not. Without this include every TU
- * that pulls in "sched.h" fails to compile on 6.6.77-class trees
+ * <linux/sched/cputime.h>. The private sched.h never includes that
+ * header, so the prototype must already be in scope when "sched.h" is
+ * parsed — the exact order fair.c uses (cputime.h line 37, sched.h
+ * line 56). Included any later, clang reports an implicit declaration
+ * at the sched.h call site, then a "static declaration follows
+ * non-static declaration" conflict when the definition is reached
  * (run 114269594026, android15-6.6 build #2).
  */
 #include <linux/sched/cputime.h>
+
+#include "sched.h"
 #include <linux/version.h>
 
 #include <linux/export.h>
