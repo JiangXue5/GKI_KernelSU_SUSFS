@@ -100,7 +100,12 @@ runs:
           HOSTCXX="/usr/bin/ccache clang++" \
           build/build.sh -j"$(nproc)"
         else
-          sed -i '/name = "kernel_aarch64",/a\    check_defconfig = "disabled",' common/BUILD.bazel
+          # Idempotent: the ABI gate (build.yml) runs this action twice in
+          # one job (pristine baseline -> features -> final). A second bare
+          # sed would append a duplicate check_defconfig attribute after
+          # 'name = "kernel_aarch64",' and bazel rejects repeated attributes.
+          grep -q 'check_defconfig = "disabled"' common/BUILD.bazel || \
+            sed -i '/name = "kernel_aarch64",/a\    check_defconfig = "disabled",' common/BUILD.bazel
           PAGE_SIZE_FLAGS=()
           if [ "$PAGE_SIZE" = "16k" ]; then
             PAGE_SIZE_FLAGS+=(--page_size=16k)
