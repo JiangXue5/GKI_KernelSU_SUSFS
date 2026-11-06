@@ -47,6 +47,7 @@
 #endif
 #include <trace/events/power.h>
 #include <uapi/linux/sched/types.h>
+#include <linux/sched/clock.h>
 
 /* Internal scheduler header (kernel/sched/sched.h) - this is where
  * map_util_freq() and arch_scale_thermal_pressure() actually live.
