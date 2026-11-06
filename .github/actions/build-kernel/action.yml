@@ -30,6 +30,15 @@ inputs:
       Sourced from env.WILD_BUILD_HOST (set by root-setup).
     required: false
     default: ''
+  log_label:
+    description: |
+      Label for the full kbuild log written to <workspace>/ci-logs/
+      as kbuild-<label>.log. The ABI gate calls this action twice in
+      one job; build.yml passes 'baseline' and 'final' there so both
+      legs are captured. Other callers keep the default 'build'.
+    required: false
+    type: string
+    default: 'build'
 
 runs:
   using: composite
@@ -79,6 +88,16 @@ runs:
         [ -n "$KBUILD_BUILD_HOST" ] && export KBUILD_BUILD_HOST
         echo "KBUILD_BUILD_USER=${KBUILD_BUILD_USER:-(default)}"
         echo "KBUILD_BUILD_HOST=${KBUILD_BUILD_HOST:-(default)}"
+        # --- keep-going + full-log capture (diagnostics) -------------------
+        # MAKEFLAGS="-k" makes kbuild keep compiling every remaining object
+        # after the first error instead of aborting, so ONE failed run
+        # enumerates ALL broken files. Exit status is still non-zero on
+        # failure, so the ABI-gate semantics are unchanged.
+        export MAKEFLAGS="-k"
+        CI_LOG_DIR="${{ github.workspace }}/ci-logs"
+        mkdir -p "$CI_LOG_DIR"
+        KBUILD_LOG="$CI_LOG_DIR/kbuild-${{ inputs.log_label }}.log"
+        echo "Full kbuild log: $KBUILD_LOG"
         sed -i 's/check_defconfig//' ./common/build.config.gki
         if [ -f "build/build.sh" ]; then
           if [ "$PAGE_SIZE" != "4k" ]; then
@@ -98,7 +117,7 @@ runs:
           CXX="/usr/bin/ccache clang++" \
           HOSTCC="/usr/bin/ccache clang" \
           HOSTCXX="/usr/bin/ccache clang++" \
-          build/build.sh -j"$(nproc)"
+          build/build.sh -j"$(nproc)" 2>&1 | tee "$KBUILD_LOG"
         else
           # Idempotent: the ABI gate (build.yml) runs this action twice in
           # one job (pristine baseline -> features -> final). A second bare
@@ -113,13 +132,20 @@ runs:
           ACTION_ENV_FLAGS=""
           [ -n "$KBUILD_BUILD_USER" ] && ACTION_ENV_FLAGS="$ACTION_ENV_FLAGS --action_env=KBUILD_BUILD_USER"
           [ -n "$KBUILD_BUILD_HOST" ] && ACTION_ENV_FLAGS="$ACTION_ENV_FLAGS --action_env=KBUILD_BUILD_HOST"
+          ACTION_ENV_FLAGS="$ACTION_ENV_FLAGS --action_env=MAKEFLAGS"
+          # --keep_going collects every failing Bazel action, not just the
+          # first; --verbose_failures prints the failing command lines;
+          # --action_env=MAKEFLAGS forwards MAKEFLAGS="-k" into the sandboxed
+          # kbuild action (first run after this change rebuilds once).
           tools/bazel build \
+            --keep_going \
+            --verbose_failures \
             --config=fast \
             "${PAGE_SIZE_FLAGS[@]}" \
             --config=stamp \
             $ACTION_ENV_FLAGS \
             --disk_cache=/home/runner/.cache/bazel \
-            //common:kernel_aarch64/Image
+            //common:kernel_aarch64/Image 2>&1 | tee "$KBUILD_LOG"
         fi
 
     - name: 'Verify Page Size in Generated .config'
