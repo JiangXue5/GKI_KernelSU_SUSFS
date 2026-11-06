@@ -43,7 +43,7 @@ patches:
     author: Masahito Suzuki (firelzrd)    # https://github.com/firelzrd/reflex
     port: Nao-YM/GKI_KernelSU_SUSFS (a60fcf3f)
     files: [.github/actions/governor/patches/reflex/]
-    kernels: [5.10, 5.15, 6.1, 6.6, 6.12] # 5.15 + 6.6 proven in upstream CI; others probe on first run
+    kernels: [5.15, 6.1, 6.6, 6.12] # 5.15 proven (Nao-YM CI); 6.x port-fixed after run 114269594026; 5.10: no sched_cpu_util — skipped
     config: [CONFIG_CPU_FREQ_GOV_REFLEX=y]
     depends_on: []                        # standalone — no shim dependency
     notes: >
@@ -58,7 +58,7 @@ patches:
     author: Templar Dev (Steambot12)      # via kusonekoworld-max/MomenToMoiX-Kernel-GKI
     port: Nao-YM/GKI_KernelSU_SUSFS (a60fcf3f)
     files: [.github/actions/governor/patches/vorpal/]
-    kernels: [5.10, 5.15, 6.1, 6.6, 6.12] # 5.15 + 6.6 proven; others probe (D3: proven shim kept)
+    kernels: [5.15, 6.1, 6.6, 6.12] # 5.15 proven; 6.x pending validation (public APIs only); 5.10 skipped
     config: [CONFIG_CPU_FREQ_GOV_VORPAL=y]
     provides: [sched_gaming_active, rfx_get_util_gki510, rfx_dl_bw_exceeded_gki510]
     depends_on: []
@@ -75,7 +75,7 @@ patches:
     author: kusonekoworld-max (koneko_dev) # MomenToMoiX-Kernel-GKI, intro aeacdbf 2026-07-30
     port: Nao-YM/GKI_KernelSU_SUSFS (f1c0fc5f)
     files: [.github/actions/governor/patches/bara-no-seidou/]
-    kernels: [5.10, 5.15, 6.1, 6.6, 6.12] # 5.15 + 6.6 proven; others probe
+    kernels: [5.15, 6.1, 6.6, 6.12] # 5.15 proven; 6.x pending validation; 5.10 skipped
     config: [CONFIG_CPU_FREQ_GOV_BARA_NO_SEIDOU=y]
     depends_on: [governor-vorpal]         # needs sched_gaming_active from the shim
     notes: >
@@ -88,7 +88,7 @@ patches:
     author: MomenToMoiX project (koneko_dev)
     port: Nao-YM/GKI_KernelSU_SUSFS (a60fcf3f)
     files: [.github/actions/governor/action.yml (fair.c step)]
-    kernels: [5.10, 5.15, 6.1, 6.6, 6.12] # best-effort: auto-skips on non-matching trees (D2)
+    kernels: [5.15, 6.1, 6.6, 6.12] # best-effort anchor match (D2); 5.10 below the governor floor
     depends_on: [governor-vorpal]
     notes: >
       All-or-nothing per file: the five injections run against a temp copy and
