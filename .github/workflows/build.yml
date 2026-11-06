@@ -3,6 +3,15 @@ permissions:
   contents: write
   actions: write
 
+env:
+  # D20 diagnostics gate (plan v3.0.0 §3.8): the ci(diagnostics) layer in the
+  # build-kernel action plus the digest / log-artifact steps below are opt-in,
+  # driven by GitHub's debug toggle ACTIONS_RUNNER_DEBUG (repo secret or
+  # variable, Settings -> Secrets and variables -> Actions, value 'true').
+  # GitHub's own precedence applies: when both exist the secret wins.
+  # false/unset/anything else = OFF = baseline build semantics, untouched.
+  CI_DIAGNOSTICS: ${{ (secrets.ACTIONS_RUNNER_DEBUG != '' && secrets.ACTIONS_RUNNER_DEBUG == 'true') || (secrets.ACTIONS_RUNNER_DEBUG == '' && vars.ACTIONS_RUNNER_DEBUG == 'true') }}
+
 on:
   workflow_call:
     inputs:
@@ -1118,6 +1127,7 @@ jobs:
           page_size: ${{ inputs.page_size }}
           kbuild_build_user: ${{ env.WILD_BUILD_USER }}
           kbuild_build_host: ${{ env.WILD_BUILD_HOST }}
+          log_label: baseline
 
       - name: "ABI gate: capture baseline Module.symvers"
         id: abi-baseline
@@ -1196,6 +1206,36 @@ jobs:
           page_size: ${{ inputs.page_size }}
           kbuild_build_user: ${{ env.WILD_BUILD_USER }}
           kbuild_build_host: ${{ env.WILD_BUILD_HOST }}
+          log_label: final
+
+      # Dedupe compiler/linker errors from the captured kbuild logs so one
+      # red run surfaces EVERY broken file (make -k keeps building past the
+      # first error). Diagnostic only: never masks the build's own failure.
+      # D20: runs only when the ACTIONS_RUNNER_DEBUG gate is ON; skipped
+      # entirely otherwise.
+      - name: Collect build-error digest
+        if: always() && env.CI_DIAGNOSTICS == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -uo pipefail
+          LOGDIR="$PWD/ci-logs"
+          if ! ls "$LOGDIR"/kbuild-*.log >/dev/null 2>&1; then
+            echo "No kbuild logs under $LOGDIR; nothing to digest."
+            exit 0
+          fi
+          DIGEST="$LOGDIR/errors-digest.txt"
+          ERRS="$(grep -hE 'error:|ERROR:|Error [0-9]+|FAILED:' "$LOGDIR"/kbuild-*.log 2>/dev/null | sort -u | head -300 || true)"
+          if [ -n "$ERRS" ]; then
+            { echo "=== unique error lines (deduped, first 300) ==="; echo "$ERRS"; } > "$DIGEST"
+            cat "$DIGEST"
+            { echo "## Build error digest"; echo '```'; cat "$DIGEST"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+            echo
+            echo "Digest: ci-logs/errors-digest.txt (also in the job summary). Full raw kbuild output rides the ci-logs artifact."
+          else
+            echo "No compiler/linker error lines in the captured logs."
+            echo "(no error lines captured)" > "$DIGEST"
+          fi
 
       # --- ABI gate phase 2 (plan v2.2.0 §12.4): zero-delta check ---------
       # Baseline = this run's pristine pre-feature build; current = the
@@ -1264,6 +1304,18 @@ jobs:
         with:
           name: ${{ steps.extract.outputs.file_name }}-ABI-gate
           path: abi-out/**
+          if-no-files-found: ignore
+          compression-level: 9
+
+      # GitHub truncates long step logs in the web UI; the raw tee'd kbuild
+      # logs (both ABI legs) survive here even when the job is red.
+      # D20: skipped entirely when the ACTIONS_RUNNER_DEBUG gate is OFF.
+      - name: Upload build logs (full kbuild output)
+        if: always() && env.CI_DIAGNOSTICS == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.extract.outputs.file_name }}-ci-logs
+          path: ci-logs/**
           if-no-files-found: ignore
           compression-level: 9
 

@@ -30,6 +30,16 @@ inputs:
       Sourced from env.WILD_BUILD_HOST (set by root-setup).
     required: false
     default: ''
+  log_label:
+    description: |
+      Label for the full kbuild log written to <workspace>/ci-logs/
+      as kbuild-<label>.log. The ABI gate calls this action twice in
+      one job; build.yml passes 'baseline' and 'final' there so both
+      legs are captured. Other callers keep the default 'build'.
+      Only used when the D20 diagnostics gate is ON.
+    required: false
+    type: string
+    default: 'build'
 
 runs:
   using: composite
@@ -79,6 +89,34 @@ runs:
         [ -n "$KBUILD_BUILD_HOST" ] && export KBUILD_BUILD_HOST
         echo "KBUILD_BUILD_USER=${KBUILD_BUILD_USER:-(default)}"
         echo "KBUILD_BUILD_HOST=${KBUILD_BUILD_HOST:-(default)}"
+        # --- diagnostics gate (D20, plan v3.0.0 §3.8) ----------------------
+        # The ci(diagnostics) layer is opt-in, driven by GitHub's debug toggle
+        # ACTIONS_RUNNER_DEBUG (repo secret or variable). build.yml computes
+        # CI_DIAGNOSTICS once at workflow level (secret wins over variable,
+        # GitHub's own precedence); composite actions inherit workflow env.
+        # OFF (default) => the invocations below stay byte-identical to the
+        # baseline: no -k, no extra bazel flags, no tee. Literal 'true' only;
+        # anything else counts as OFF.
+        CI_DIAGNOSTICS="${CI_DIAGNOSTICS:-false}"
+        if [ "$CI_DIAGNOSTICS" = "true" ]; then
+          export MAKEFLAGS="-k"
+          CI_LOG_DIR="${{ github.workspace }}/ci-logs"
+          mkdir -p "$CI_LOG_DIR"
+          KBUILD_LOG="$CI_LOG_DIR/kbuild-${{ inputs.log_label }}.log"
+          echo "Diagnostics: ON (make -k + bazel --keep_going; full log -> $KBUILD_LOG)"
+        else
+          echo "Diagnostics: OFF (baseline make/bazel semantics; enable with repo secret/variable ACTIONS_RUNNER_DEBUG=true)"
+        fi
+        run_logged() {
+          # shell: bash already runs with -e -o pipefail, so the tee branch
+          # keeps the build's own exit status; the OFF branch runs the command
+          # verbatim (no pipeline), exit status untouched.
+          if [ "$CI_DIAGNOSTICS" = "true" ]; then
+            "$@" 2>&1 | tee "$KBUILD_LOG"
+          else
+            "$@"
+          fi
+        }
         sed -i 's/check_defconfig//' ./common/build.config.gki
         if [ -f "build/build.sh" ]; then
           if [ "$PAGE_SIZE" != "4k" ]; then
@@ -98,7 +136,7 @@ runs:
           CXX="/usr/bin/ccache clang++" \
           HOSTCC="/usr/bin/ccache clang" \
           HOSTCXX="/usr/bin/ccache clang++" \
-          build/build.sh -j"$(nproc)"
+          run_logged build/build.sh -j"$(nproc)"
         else
           # Idempotent: the ABI gate (build.yml) runs this action twice in
           # one job (pristine baseline -> features -> final). A second bare
@@ -113,7 +151,18 @@ runs:
           ACTION_ENV_FLAGS=""
           [ -n "$KBUILD_BUILD_USER" ] && ACTION_ENV_FLAGS="$ACTION_ENV_FLAGS --action_env=KBUILD_BUILD_USER"
           [ -n "$KBUILD_BUILD_HOST" ] && ACTION_ENV_FLAGS="$ACTION_ENV_FLAGS --action_env=KBUILD_BUILD_HOST"
-          tools/bazel build \
+          # Diagnostics (D20): keep-going flags only when the gate is ON.
+          # --keep_going collects every failing Bazel action, not just the
+          # first; --verbose_failures prints the failing command lines;
+          # --action_env=MAKEFLAGS forwards MAKEFLAGS="-k" into the sandboxed
+          # kbuild action (first ON run after this change rebuilds once).
+          BAZEL_DIAG_FLAGS=""
+          if [ "$CI_DIAGNOSTICS" = "true" ]; then
+            BAZEL_DIAG_FLAGS="--keep_going --verbose_failures"
+            ACTION_ENV_FLAGS="$ACTION_ENV_FLAGS --action_env=MAKEFLAGS"
+          fi
+          run_logged tools/bazel build \
+            $BAZEL_DIAG_FLAGS \
             --config=fast \
             "${PAGE_SIZE_FLAGS[@]}" \
             --config=stamp \
