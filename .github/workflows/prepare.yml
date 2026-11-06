@@ -96,26 +96,18 @@ on:
         required: false
         type: string
         default: "4k"
+      # 25-input consolidation: merged from google_backport (bool) +
+      # google_backport_ref (string); semantics preserved.
       google_backport:
-        description: "Apply the Google upstream backport series (android15-6.6 legs; series branch auto-detected via the gki<digits> naming contract)"
-        required: false
-        type: boolean
-        default: false
-      google_backport_ref:
-        description: "Series source ref in this repo. Empty = AUTO: auto-detect the gki<V><P><sublevel> branch for this leg. A branch/tag/SHA pins an exact series state for reproducible builds."
+        description: "Google upstream backport series, android15-6.6 legs: off = skip | auto = auto-detect the gki<V><P><sublevel> branch for this leg | branch/tag/SHA = pin an exact series state for reproducible builds"
         required: false
         type: string
-        default: ""
+        default: "off"
       abi_gate:
-        description: "ABI gate mode forwarded to build.yml: warn (default) | enforce | off"
+        description: "ABI gate mode forwarded to build.yml: warn (default) | enforce | warn+fail-new | enforce+fail-new | off"
         required: false
         type: string
         default: "warn"
-      abi_gate_fail_on_new:
-        description: "ABI gate: also fail on new exported symbols (pure-build leak canary)"
-        required: false
-        type: boolean
-        default: false
       bore_variant:
         description: "BORE patch generation for 6.6 legs: 5.9.6 (default) or 5.1.0"
         required: false
@@ -374,9 +366,7 @@ jobs:
       use_cache: ${{ inputs.use_cache }}
       page_size: ${{ inputs.page_size }}
       google_backport: ${{ inputs.google_backport }}
-      google_backport_ref: ${{ inputs.google_backport_ref }}
       abi_gate: ${{ inputs.abi_gate }}
-      abi_gate_fail_on_new: ${{ inputs.abi_gate_fail_on_new }}
       bore_variant: ${{ inputs.bore_variant }}
       stock_config_artifact: stock-configs-${{ needs.generate-matrix.outputs.version_slug }}
     secrets: inherit

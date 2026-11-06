@@ -86,31 +86,23 @@ on:
         required: false
         type: string
         default: "4k"
+      # 25-input consolidation: merged from google_backport (bool) +
+      # google_backport_ref (string); semantics preserved.
       google_backport:
-        description: "Apply the Google upstream backport series (android15-6.6 legs; series branch auto-detected via the gki<digits> naming contract)"
-        required: false
-        type: boolean
-        default: false
-      google_backport_ref:
-        description: "Series source ref in this repo. Empty = AUTO: auto-detect the gki<V><P><sublevel> branch for this leg. A branch/tag/SHA pins an exact series state for reproducible builds."
+        description: "Google upstream backport series, android15-6.6 legs: off = skip | auto = auto-detect the gki<V><P><sublevel> branch for this leg | branch/tag/SHA = pin an exact series state for reproducible builds"
         required: false
         type: string
-        default: ""
+        default: "off"
       stock_config_artifact:
         description: "Artifact name with prefetched stock configs (stock_<kver>[_16k].config)"
         required: false
         type: string
         default: ""
       abi_gate:
-        description: "ABI gate (plan v2.2.0 §12): warn = report deltas, never block | enforce = fail on existing-symbol CRC delta vs this run's pristine baseline | off = skip baseline build + gate (single build, zero overhead)"
+        description: "ABI gate (plan v2.2.0 §12): warn = report deltas, never block | enforce = fail on existing-symbol CRC delta vs this run's pristine baseline | +fail-new suffix = also fail on new exported symbols (D9) | off = skip baseline build + gate (single build, zero overhead)"
         required: false
         type: string
         default: "warn"
-      abi_gate_fail_on_new:
-        description: "ABI gate: also fail on NEW exported symbols (pure-build leak canary, D9; keep false for feature builds)"
-        required: false
-        type: boolean
-        default: false
       bore_variant:
         description: "BORE patch generation for 6.6 legs: 5.9.6 (default) or 5.1.0"
         required: false
@@ -198,7 +190,7 @@ jobs:
 
       - name: Apply Google Upstream Backport Series (auto-detected gki<sublevel>)
         id: google-backport
-        if: inputs.google_backport && inputs.version == 'android15-6.6'
+        if: inputs.google_backport && inputs.google_backport != 'off' && inputs.version == 'android15-6.6'
         shell: bash
         run: |
           set -euo pipefail
@@ -213,10 +205,10 @@ jobs:
           GBP_TAG_RE="^${GBP_KFAM//./\\.}\.([0-9]+)-backport-"
 
           # --- Stage 1: ref resolution (auto is the default; explicit pins) ---
-          GBP_REF="${{ inputs.google_backport_ref }}"
+          GBP_REF="${{ inputs.google_backport }}"
           GBP_REF_MODE=explicit
           GBP_CANDIDATES=""
-          if [[ -z "$GBP_REF" ]]; then
+          if [[ -z "$GBP_REF" || "$GBP_REF" == "auto" ]]; then
             GBP_REF_MODE=auto
             # naming contract: gki + digits ONLY, full match — gki-wip /
             # gki_debug / gki6677test / gki6677-old can never match.
@@ -1195,9 +1187,12 @@ jobs:
         working-directory: ${{ github.workspace }}/kernel
         env:
           ABI_GATE_MODE: ${{ inputs.abi_gate }}
-          ABI_GATE_FAIL_ON_NEW: ${{ inputs.abi_gate_fail_on_new }}
         run: |
           set -euo pipefail
+          # 25-input consolidation: the D9 fail-on-new canary now rides the
+          # abi_gate mode string as a "+fail-new" suffix; policy = base mode.
+          ABI_GATE_FAIL_ON_NEW=$([[ "$ABI_GATE_MODE" == *"+fail-new" ]] && echo true || echo false)
+          GATE_POLICY="${ABI_GATE_MODE%%+*}"
           ABI_DIR="${{ github.workspace }}/abi-out"
           [ -s "$ABI_BASELINE" ] || { echo "ERROR: baseline missing ($ABI_BASELINE) — capture step did not run?" >&2; exit 1; }
           FLAG=""
@@ -1234,11 +1229,11 @@ jobs:
             echo "- evidence: \`abi-delta.txt\` + \`check.log\` in the ABI-gate artifact"
           } >> "$GITHUB_STEP_SUMMARY"
           if [ "$RC" -ne 0 ]; then
-            if [ "$ABI_GATE_MODE" = "enforce" ]; then
-              echo "::error::ABI gate FAIL (mode=enforce): missing symbol or CRC delta on an existing export vs this run's pristine baseline — see step summary and the ABI-gate artifact"
+            if [ "$GATE_POLICY" = "enforce" ]; then
+              echo "::error::ABI gate FAIL (mode=$GATE_POLICY): missing symbol or CRC delta on an existing export vs this run's pristine baseline — see step summary and the ABI-gate artifact"
               exit 1
             fi
-            echo "::warning::ABI gate FAIL (mode=warn): missing symbol or CRC delta vs the pristine baseline — advisory only (phase A), see step summary and the ABI-gate artifact"
+            echo "::warning::ABI gate FAIL (mode=$GATE_POLICY): missing symbol or CRC delta vs the pristine baseline — advisory only (phase A), see step summary and the ABI-gate artifact"
             exit 0
           fi
           echo "ABI gate PASS (mode=$ABI_GATE_MODE)"
