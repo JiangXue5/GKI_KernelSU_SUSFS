@@ -1,151 +1,270 @@
-# PATCHES.yml — single pointer / enablement list for the `feature/patches` series
+# PATCHES.yml — the OPERATIVE manifest for the `feature/patches` series (v3)
 # ================================================================================
-# Each entry maps 1:1 to a commit on the `feature/patches` branch (based on
-# `main-chandr1000`). Disable a feature:
+# This file is parsed by the generic applier on `main-chandr1000`
+# (.github/actions/feature-patches) — it is the thing the build runs, not just
+# documentation (plan v3.0.0 §3.2, decisions D15–D19).
 #
-#   * NOW (before CI wiring):  `git revert <commit>` — the revert cleanly removes
-#     exactly that feature (one commit per feature by design).
-#   * AFTER CI wiring:         flip `enabled: false` here (or gate the workflow
-#     step / dispatch input) — this file stays the documentation of record.
+#   series.apply   : git-apply (D15) — strict `git apply --check` then apply,
+#                    .rej/.log collected as artifacts on failure
+#   series.order   : list order below == apply order (depends_on validated at
+#                    parse time; a disabled/failed dep auto-skips dependents
+#                    LOUDLY in the step summary)
+#   kernels        : gated on VERSION/PATCHLEVEL read from the tree's own
+#                    kernel Makefile (D18) — not on dispatch inputs
+#   best_effort    : true ⇒ apply failure = ::warning:: + skip (never red);
+#                    false ⇒ apply failure = red build. Flip to false once a
+#                    probe family passes its canary (Phase E).
+#   config         : emitted by the applier into the existing set-kernel-config
+#                    step (D17) — patches never touch defconfig
+#   A/B bore 6.6   : flip `enabled` between the 5.9.6 entry and the 5.1.0
+#                    entry here (no dispatch knob — §3.5)
 #
-# Re-enable: revert the revert, or flip back to `true`.
-#
-# Plan: integration_plan_feature_patches_v2.2.0.md (decisions D1..D14 — all recommendations)
+# Plan: integration_plan_feature_patches_v3.0.0.md
 # Commit identity: Irina Shinakawa <25380803+chandr1000@users.noreply.github.com>
 
 series:
   branch: feature/patches
-  base: main-chandr1000
-  delivery: feature_patches.mbox          # apply with: git am --3way feature_patches.mbox
-  ci_wiring: done                          # 4-commit wiring series on main-chandr1000; ABI gate live (see infrastructure below)
+  base: android15-6.6 @ 6.6.77 (android15-2025-03)   # kernel tree the diffs are generated against (recorded, not fetched)
+  apply: git-apply                 # applier mechanism (D15)
+  order: list-order                # series apply order == list order (depends_on validated at parse time)
 
 patches:
-  - id: bore-scheduler                    # commit 1
-    commit_subject: "feat(bore): BORE scheduler for all GKI families (vendored)"
+  # --- F1: BORE scheduler ---------------------------------------------------
+  - id: bore-scheduler                   # 6.6 default variant (5.9.6 generation)
     enabled: true
+    kind: patch
+    patch: patches/bore/0001-linux6.6.67-gki-bore-5.9.6.patch
+    kernels: ["6.6"]
+    depends_on: []
+    best_effort: false
+    config: [CONFIG_SCHED_BORE=y, CONFIG_MIN_BASE_SLICE_NS=2000000]
     title: BORE scheduler (Burst-Oriented Response Enhancer)
     author: Masahito Suzuki (firelzrd)    # https://github.com/firelzrd/bore-scheduler
     port: WildKernels GKI_KernelSU_SUSFS (27cb8b3e, be224605, c606cc2a, eba7eac4, c2f54d01, 06488106)
-    files: [.github/actions/bore/, .github/scripts/bore*.py]
-    kernels: [5.10, 5.15, 6.1, 6.6, 6.12] # 6.6 variant selectable: 5.9.6 (default) | 5.1.0
-    config: [CONFIG_SCHED_BORE=y, CONFIG_MIN_BASE_SLICE_NS=2000000]
     notes: >
-      5.10/5.15/6.1 use the author's pinned legacy patches; 6.6 uses the two
-      vendored patches (variant input); 6.12 resolves the newest patch from the
-      author's patches/stable/ at build time (retry + git fallback). KMI-safe:
-      burst state is relocated into ANDROID_KABI_RESERVE slots by the vendored
-      bore*.py scripts so stock vendor modules keep working.
+      REGENERATED strict git-apply form of the vendored 5.9.6 patch: the
+      original had a known-rejecting sysctl hunk on GKI; the regenerated
+      diff bakes in the full proven fixup sequence (task_of fwd decl,
+      out-of-line burst state via bore66_state/flat, decl hoists, GKI
+      sysctl repair — scripts/bore_66_apply.sh) and applies under strict
+      git apply. KMI stays stock via the DroidSpaces slot-merge.
 
-  - id: governor-reflex                   # commit 2
-    commit_subject: "feat(governor): add Reflex governor (schedutil + idle accounting)"
+  - id: bore-scheduler-66-510            # 6.6 ALTERNATIVE variant (5.1.0 generation)
+    enabled: false                       # A/B: enable this, disable bore-scheduler
+    kind: patch
+    patch: patches/bore/0002-linux6.6.67-gki-bore-5.1.0.patch
+    kernels: ["6.6"]
+    depends_on: []
+    best_effort: false
+    config: [CONFIG_SCHED_BORE=y, CONFIG_MIN_BASE_SLICE_NS=2000000]
+    title: BORE scheduler (5.1.0-generation patch for 6.6, alternative variant)
+    author: Masahito Suzuki (firelzrd)
+    port: WildKernels GKI_KernelSU_SUSFS (vendored 5.1.0 variant)
+    notes: >
+      Regenerated strict form of the vendored 5.1.0 variant incl. its
+      proven fixups (sched_entity 4-slot relocation + GKI sysctl repairs —
+      scripts/bore_66_510_apply.sh). Mutually exclusive with bore-scheduler;
+      the fair.c gaming-bias anchors are cut against the 5.9.6 tree.
+
+  - id: bore-scheduler-legacy-510-515    # 5.10 + 5.15 probe families
     enabled: true
+    kind: patch
+    patch: patches/bore/legacy/0001-linux5.15.y-bore5.1.0.patch
+    kernels: ["5.10", "5.15"]
+    depends_on: []
+    best_effort: true                    # probe family — flip to false after the family canary
+    config: [CONFIG_SCHED_BORE=y, CONFIG_MIN_BASE_SLICE_NS=2000000]
+    title: BORE scheduler (author's pinned 5.15 legacy patch; applies to 5.10 too)
+    author: Masahito Suzuki (firelzrd)
+    port: vendored from firelzrd patches/legacy/linux-5.15-bore (pinned URL, was fetched at build time)
+    notes: >
+      Vendored verbatim (same bytes the old action fetched). 14-15/14 hunks
+      clean per the proven action. 5.10 needs the task_of fwd decl + the
+      8-scalar KABI relocation — see bore-kabi-legacy below.
+
+  - id: bore-scheduler-legacy-61         # 6.1 probe family
+    enabled: true
+    kind: patch
+    patch: patches/bore/legacy/0001-linux6.1.y-bore5.1.0.patch
+    kernels: ["6.1"]
+    depends_on: []
+    best_effort: true                    # probe family — flip to false after the family canary
+    config: [CONFIG_SCHED_BORE=y, CONFIG_MIN_BASE_SLICE_NS=2000000]
+    title: BORE scheduler (author's pinned 6.1 legacy patch)
+    author: Masahito Suzuki (firelzrd)
+    port: vendored from firelzrd patches/legacy/linux-6.1-bore (pinned URL, was fetched at build time)
+    notes: >
+      14/14 hunks clean per the proven action; KABI relocation via
+      bore-kabi-legacy.
+
+  - id: bore-kabi-legacy
+    enabled: true
+    kind: script
+    script: scripts/bore_5x_fixup.sh
+    kernels: ["5.10", "5.15", "6.1"]
+    depends_on: [bore-scheduler-legacy-510-515, bore-scheduler-legacy-61]
+    best_effort: true
+    title: BORE legacy-family fixups (task_of fwd decl, decl hoists, KABI relocation)
+    author: "TheWildJames (WildKernels) — bore_kabi_612.py; packaging: this repo"
+    notes: >
+      Step bodies byte-verbatim from the proven bore action. The depends_on
+      ids are kernel-gated, so on 5.15 only the 5.15 patch counts as the
+      active dep; on 6.1 only the 6.1 patch.
+
+  - id: bore-scheduler-612
+    enabled: true
+    kind: script
+    script: scripts/bore_612_apply.sh
+    kernels: ["6.12"]
+    depends_on: []
+    best_effort: true
+    title: BORE scheduler (dynamic resolution from firelzrd patches/stable, retry + git fallback)
+    author: "Masahito Suzuki (firelzrd); resolver: TheWildJames (WildKernels)"
+    port: WildKernels GKI_KernelSU_SUSFS (bore action select/download/verify/apply steps, byte-verbatim)
+    notes: >
+      The 6.12 patch cannot be vendored stably (the author renews
+      patches/stable/ and DELETES old files — pinned names 404'd across 27
+      jobs). Resolves the newest stable patch at build time (API listing
+      with git-clone fallback), verifies provenance, applies, relocates
+      bore_ctx out-of-line (bore12_state/flat — fixes the task_struct KMI
+      bootloop class) and repairs the fuzz-spliced update_curr_bore block.
+
+  # --- F2: Reflex governor ---------------------------------------------------
+  - id: governor-reflex
+    enabled: true
+    kind: patch
+    patch: patches/reflex/0001-cpufreq-reflex-governor.patch
+    kernels: ["5.15", "6.1", "6.6", "6.12"]      # 5.15 proven (Nao-YM CI); 6.x port-fixed after run 114269594026; 5.10: no sched_cpu_util — skipped
+    depends_on: []                        # standalone — no shim dependency
+    best_effort: false
+    config: [CONFIG_CPU_FREQ_GOV_REFLEX=y]
     title: Reflex CPUFreq governor
     author: Masahito Suzuki (firelzrd)    # https://github.com/firelzrd/reflex
     port: Nao-YM/GKI_KernelSU_SUSFS (a60fcf3f)
-    files: [.github/actions/governor/patches/reflex/]
-    kernels: [5.15, 6.1, 6.6, 6.12] # 5.15 proven (Nao-YM CI); 6.x port-fixed after run 114269594026; 5.10: no sched_cpu_util — skipped
-    config: [CONFIG_CPU_FREQ_GOV_REFLEX=y]
-    depends_on: []                        # standalone — no shim dependency
     notes: >
       No CONFIG_CPU_FREQ_DEFAULT_GOV_REFLEX on purpose: proven not to work
       upstream and reverted there. The embedded copy is the earlier
-      hispeed-blend generation, not firelzrd v0.4.0.
+      hispeed-blend generation, not firelzrd v0.4.0. cputime.h include-order
+      fix (aacfc1b9 + 4d26dddb) folded.
 
-  - id: governor-vorpal                   # commit 3
-    commit_subject: "feat(governor): add Vorpal governor + GKI util compat shim"
+  # --- F3: Vorpal governor + compat shim -------------------------------------
+  - id: governor-vorpal
     enabled: true
+    kind: patch
+    patch: patches/vorpal/0001-cpufreq-vorpal-governor-gki510-compat.patch
+    kernels: ["5.15", "6.1", "6.6", "6.12"]      # 5.15 proven; 6.x pending validation (public APIs only); 5.10 skipped
+    depends_on: []
+    best_effort: false
+    config: [CONFIG_CPU_FREQ_GOV_VORPAL=y]
+    provides: [sched_gaming_active, rfx_get_util_gki510, rfx_dl_bw_exceeded_gki510]
     title: Vorpal CPUFreq Governor v2.0 (Perfect Gaming & Thermal Edition)
     author: Templar Dev (Steambot12)      # via kusonekoworld-max/MomenToMoiX-Kernel-GKI
     port: Nao-YM/GKI_KernelSU_SUSFS (a60fcf3f)
-    files: [.github/actions/governor/patches/vorpal/]
-    kernels: [5.15, 6.1, 6.6, 6.12] # 5.15 proven; 6.x pending validation (public APIs only); 5.10 skipped
-    config: [CONFIG_CPU_FREQ_GOV_VORPAL=y]
-    provides: [sched_gaming_active, rfx_get_util_gki510, rfx_dl_bw_exceeded_gki510]
-    depends_on: []
     notes: >
       rfx_gki510_compat.c (obj-y, always built) is the SOLE definer of
-      sched_gaming_active in this tree — Bara-no-Seidou and the fair.c gaming
-      bias consume it. Disabling vorpal disables both of those automatically
-      (their steps warn + skip).
+      sched_gaming_active in this tree — Bara-no-Seidou and the fair.c
+      gaming bias consume it. Disabling vorpal auto-skips both (loud, in
+      the summary). Input-handler init-bug fix folded.
 
-  - id: governor-bara-no-seidou           # commit 4
-    commit_subject: "feat(governor): add Bara-no-Seidou governor (battery + auto gaming)"
+  # --- F4: Bara-no-Seidou governor -------------------------------------------
+  - id: governor-bara-no-seidou
     enabled: true
+    kind: patch
+    patch: patches/bara-no-seidou/0001-cpufreq-bara-no-seidou-governor.patch
+    kernels: ["5.15", "6.1", "6.6", "6.12"]      # 5.15 proven; 6.x pending validation; 5.10 skipped
+    depends_on: [governor-vorpal]         # needs sched_gaming_active from the shim
+    best_effort: false
+    config: [CONFIG_CPU_FREQ_GOV_BARA_NO_SEIDOU=y]
     title: Bara-no-Seidou CPUFreq governor (battery + auto gaming mode)
     author: kusonekoworld-max (koneko_dev) # MomenToMoiX-Kernel-GKI, intro aeacdbf 2026-07-30
     port: Nao-YM/GKI_KernelSU_SUSFS (f1c0fc5f)
-    files: [.github/actions/governor/patches/bara-no-seidou/]
-    kernels: [5.15, 6.1, 6.6, 6.12] # 5.15 proven; 6.x pending validation; 5.10 skipped
-    config: [CONFIG_CPU_FREQ_GOV_BARA_NO_SEIDOU=y]
-    depends_on: [governor-vorpal]         # needs sched_gaming_active from the shim
     notes: >
-      Injection warns + skips if the shim is absent — keep vorpal enabled.
+      Consumes sched_gaming_active from the vorpal shim. local_clock
+      include fix (1e4570af) folded — this is the file whose stale copy
+      caused incident round 3.
 
-  - id: fair-gaming-bias                  # commit 5
-    commit_subject: "feat(sched): fair.c gaming-mode bias via sched_gaming_active (best-effort)"
+  # --- F6: fair.c gaming bias -------------------------------------------------
+  - id: fair-gaming-bias
     enabled: true
-    title: CFS gaming-mode bias (vruntime stretch / preemption / migration isolation)
-    author: MomenToMoiX project (koneko_dev)
+    kind: patch
+    patch: patches/gaming-bias/0001-fair-c-gaming-mode-bias.patch
+    kernels: ["6.6"]                        # anchors cut against EEVDF 6.6.77 post-BORE
+    depends_on: [governor-vorpal, bore-scheduler]
+    best_effort: true                     # anchor drift ⇒ warn + skip, never red (D16)
+    title: CFS gaming-mode bias (vruntime stretch / half-slice yield / migration isolation)
+    author: "MomenToMoiX project (koneko_dev); EEVDF 6.6 anchor port: this repo"
     port: Nao-YM/GKI_KernelSU_SUSFS (a60fcf3f)
-    files: [.github/actions/governor/action.yml (fair.c step)]
-    kernels: [5.15, 6.1, 6.6, 6.12] # best-effort anchor match (D2); 5.10 below the governor floor
-    depends_on: [governor-vorpal]
     notes: >
-      All-or-nothing per file: the five injections run against a temp copy and
-      only replace fair.c when every marker matches; otherwise the step warns
-      and skips. Governors stay fully functional without it. Stacks cleanly
-      with BORE (apply bore first — both touch kernel/sched/fair.c).
+      ANCHOR FINDING (Phase A): 3 of the 5 upstream injections target
+      pre-EEVDF shapes (check_preempt_tick, normalized_sysctl_sched_latency,
+      adjacent update_min_vruntime) that do not exist on android15-6.6 —
+      the old warn+skip step NEVER applied on this base; the pre-reset
+      "green" builds ran WITHOUT the bias. Injections 1-3 are ported to
+      the EEVDF shapes with identical semantics (calc_delta_fair/
+      update_deadline adjacency, curr->slice for ideal_runtime);
+      injections 4-5 are byte-identical to the proven action. Series-
+      ordered after bore (parent = post-BORE fair.c) and vorpal (shim).
 
-  - id: momentomoix-driver                # commit 6
-    commit_subject: "feat(driver): MomenToMoiX (tenebrion) screen/thermal QoS driver"
+  # --- F5: MomenToMoiX driver + SELinux ----------------------------------------
+  - id: momentomoix-driver
     enabled: true
+    kind: patch
+    patch: patches/momentx/0001-momx-tenebrion-qos-driver.patch
+    kernels: ["5.10", "5.15", "6.1", "6.6", "6.12"]
+    depends_on: []
+    best_effort: false
+    config: [CONFIG_ZRAM=m, CONFIG_ZRAM_DEF_COMP_ZSTD=y, CONFIG_ZSMALLOC=m, CONFIG_ZSMALLOC_STAT=y,
+             CONFIG_LRU_GEN=y, CONFIG_LRU_GEN_ENABLED=y, CONFIG_LRU_GEN_STATS=n, CONFIG_COMPACTION=y,
+             CONFIG_MIGRATION=y, CONFIG_KSM=y, CONFIG_TRANSPARENT_HUGEPAGE=y, CONFIG_IOSCHED_BFQ=y,
+             CONFIG_BFQ_GROUP_IOSCHED=y, CONFIG_MQ_IOSCHED_DEADLINE=y, CONFIG_PREEMPT=y, CONFIG_PSI=y,
+             CONFIG_PREEMPT_NONE=n, CONFIG_PREEMPT_VOLUNTARY=n, CONFIG_HIGH_RES_TIMERS=y,
+             CONFIG_TCP_FASTOPEN=y, CONFIG_CPU_IDLE=y, CONFIG_CPU_IDLE_GOV_MENU=y,
+             CONFIG_CPU_IDLE_GOV_TEO=y, CONFIG_WQ_POWER_EFFICIENT_DEFAULT=y, CONFIG_PM_WAKELOCKS=y,
+             CONFIG_PM_WAKELOCKS_LIMIT=100, CONFIG_PM_WAKELOCKS_GC=y, CONFIG_SUSPEND=y,
+             CONFIG_DEVFREQ_GOV_PERFORMANCE=y, CONFIG_DEVFREQ_GOV_PASSIVE=y, CONFIG_UCLAMP_TASK=y,
+             CONFIG_UCLAMP_TASK_GROUP=y, CONFIG_CMA=y, CONFIG_DMA_CMA=y, CONFIG_MQ_IOSCHED_KYBER=y,
+             CONFIG_SUSPEND_FREEZER=y, CONFIG_CPU_FREQ_GOV_SCHEDUTIL=y, CONFIG_ENERGY_MODEL=y,
+             CONFIG_SCHED_MC=y, CONFIG_NO_HZ_IDLE=y, CONFIG_NO_HZ_FULL=n]
     title: MomenToMoiX (Tenebrion) screen/charging/thermal QoS driver
     author: "koneko_dev; Tenebrion logic + SELinux rules: Kanagawa Yamada (LoggingNewMemory)"
     port: Nao-YM/GKI_KernelSU_SUSFS (69a2d582, 25ae398b)
-    files: [.github/actions/momentx/]
-    kernels: [5.10, 5.15, 6.1, 6.6, 6.12]
-    depends_on: []
     notes: >
-      Includes the MGLRU/KSM/zram-zstd/zsmalloc-stats/BFQ/PSI/uclamp config
-      block. SELinux rules inject into a KernelSU-family rules.c (ksu_allow
-      table); on other root flavors the step warns + skips (D4) and the driver
-      still builds.
+      The MGLRU/KSM/zram-zstd/zsmalloc-stats/BFQ/PSI/uclamp config block
+      moved from the old action's set-kernel-config step into this
+      manifest config: field (D17).
 
-  # Commits 7 (per-governor enable inputs) and 8 (this file + THIRD_PARTY_NOTICES.md)
-  # are series plumbing and have no enable/disable semantics of their own.
+  - id: momentomoix-selinux
+    enabled: true
+    kind: script
+    script: scripts/selinux.sh
+    kernels: ["5.10", "5.15", "6.1", "6.6", "6.12"]
+    depends_on: [momentomoix-driver]
+    best_effort: true                     # D4 KSU-flavor guard inside (warn + skip)
+    title: Tenebrion SELinux rules injection (KernelSU-family rules.c)
+    author: Kanagawa Yamada (LoggingNewMemory) — adapted from the SuiKernel pattern
+    port: Nao-YM/GKI_KernelSU_SUSFS
+    notes: >
+      Self-contained: the rules.c discovery + D4 warn+skip guard moved
+      inside the script (it lived in the old momentx action step). On root
+      flavors without a ksu_allow table the driver still builds.
 
 infrastructure:
-  - id: abi-gate                          # CI-wiring series (lives on main-chandr1000)
+  - id: abi-gate                          # lives on main-chandr1000 (runner), re-landed by the v3 wiring
     kind: ci-guard
     enabled: true                         # abi_gate dispatch input: warn (default, phase A per D11) | enforce | off; "+fail-new" suffix = D9 canary
     title: ABI gate — existing-symbol CRC zero-delta vs this run's pristine baseline
     author: "Irina Shinakawa (chandr1000) — gate design + script originate from this repo's gki6677 work (G1 closed 2026-11-01)"
-    files: [.github/scripts/abi-gate.sh, .github/actions/build-kernel/action.yml (idempotency guard), .github/workflows/build.yml (two-phase wiring), .github/workflows/prepare.yml, .github/workflows/main.yml (input threading)]
-    kernels: [5.10, 5.15, 6.1, 6.6, 6.12]
-    dispatch: [abi_gate]                  # single knob; suffix carries the old abi_gate_fail_on_new
+    files: [.github/scripts/abi-gate.sh, .github/actions/build-kernel/action.yml (idempotency guard), .github/workflows/build.yml (two-phase wiring), .github/workflows/main.yml (input threading)]
+    kernels: ["5.10", "5.15", "6.1", "6.6", "6.12"]
+    dispatch: [abi_gate]
     notes: >
-      Two-tier design (plan v2.2.0 §12.4): Tier 1 (the runner on
-      main-chandr1000) captures the baseline per gated run from the pristine
-      pre-feature tree and gates the feature build against it — every delta
-      is patch-induced by construction (steady state: 0 drifted / 0 missing /
-      <=3 new info). Tier 2 (pinned gki<digits> branches) keeps the
-      frozen-baseline + provenance-manifest machinery. Baseline build adds
-      one pristine compile per gated run; abi_gate=off restores the
-      single-build behavior with zero overhead. New symbols are info-only on
-      feature builds; the +fail-new suffix turns them into failures for pure
-      variants (D9).
-
-      Dispatch-surface note: main.yml hit GitHub's 25-input
-      workflow_dispatch cap, so the Part II knobs were consolidated in
-      the cap-fix series on main-chandr1000
-      (ci_25_input_dispatch_cap_fix.mbox) —
-      bore_variant absorbs use_bore (off | 5.9.6 | 5.1.0); google_backport
-      absorbs use_google_backport + google_backport_ref (off | auto | ref);
-      abi_gate absorbs abi_gate_fail_on_new via the "+fail-new" suffix — and
-      kernel_runner / test_release_notes moved to repo Actions variables
-      (KERNEL_RUNNER / TEST_RELEASE_NOTES). This manifest lives on
-      feature/patches only: the runner branch dropped it when the wiring
-      series landed, so this file remains the documentation of record.
+      Two-tier design (plan v2.2.0 §12.4, unchanged in v3 §11): Tier 1
+      captures the baseline per gated run from the pristine pre-feature
+      tree (every delta is patch-induced by construction; steady state
+      0 drifted / 0 missing / <=3 new info). Tier 2 (pinned gki<digits>
+      branches) keeps the frozen-baseline machinery, later. The
+      diagnostics layer (keep-going kbuild + error capture) re-lands
+      gated behind the ACTIONS_RUNNER_DEBUG repo toggle — D20, §3.8.
 
 attribution:
   license: GPL-2.0
@@ -158,5 +277,5 @@ attribution:
     - "Templar Dev (Steambot12) — Vorpal governor"
     - "kusonekoworld-max (koneko_dev) — Bara-no-Seidou governor; MomenToMoiX project; fair.c gaming bias"
     - "Kanagawa Yamada (LoggingNewMemory) — Tenebrion logic + SELinux rules"
-    - "TheWildJames (WildKernels) — BORE composite-action port"
+    - "TheWildJames (WildKernels) — BORE composite-action port + KMI relocation scripts"
     - "Nao-YM — composite-action packaging layer"

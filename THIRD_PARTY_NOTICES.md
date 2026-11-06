@@ -31,24 +31,24 @@
 
 > [!NOTE]
 > Unlike the table above, the following **are vendored in this repo**
-> (`.github/actions/{bore,governor,momentx}/`, `.github/scripts/bore*.py`,
+> (`.github/actions/{bore,governor,momentx}/`, `scripts/bore*.py`,
 > pointer file `PATCHES.yml`). Every original copyright header is preserved
 > byte-for-byte and the original commit subjects are quoted in the series'
 > commit messages. All GPL-2.0.
 
 | Component | Author(s) | Upstream | License | Vendored at |
 |-----------|-----------|----------|---------|-------------|
-| BORE scheduler patches | Masahito Suzuki (firelzrd) | [firelzrd/bore-scheduler](https://github.com/firelzrd/bore-scheduler) | GPL-2.0 | `.github/actions/bore/patches/` |
-| BORE KMI/KABI relocation scripts | TheWildJames (WildKernels) | [WildKernels/GKI_KernelSU_SUSFS](https://github.com/WildKernels/GKI_KernelSU_SUSFS) (`27cb8b3e`, `eba7eac4`, `c606cc2a`, `06488106`) | GPL-2.0 | `.github/scripts/bore*.py` |
-| BORE composite action (version map, retry + git fallback) | TheWildJames (WildKernels) | WildKernels/GKI_KernelSU_SUSFS (`27cb8b3e` `feat(bore): BORE scheduler for all GKI families`) | GPL-2.0 | `.github/actions/bore/action.yml` |
-| Reflex CPUFreq governor | Masahito Suzuki (firelzrd) | [firelzrd/reflex](https://github.com/firelzrd/reflex) — header: `Copyright (C) 2026 Masahito Suzuki` | GPL-2.0 | `.github/actions/governor/patches/reflex/` |
-| Vorpal CPUFreq Governor v2.0 (Perfect Gaming & Thermal Edition) | Templar Dev (Steambot12) | via [kusonekoworld-max/MomenToMoiX-Kernel-GKI](https://github.com/kusonekoworld-max/MomenToMoiX-Kernel-GKI) — header: `Author: Templar Dev (Steambot12)` | GPL-2.0 | `.github/actions/governor/patches/vorpal/cpufreq_vorpal.c` |
-| GKI compat shim (`rfx_gki510_compat.c`) | Nao-YM (GKI port artifact) | [Nao-YM/GKI_KernelSU_SUSFS](https://github.com/Nao-YM/GKI_KernelSU_SUSFS) (`a60fcf3f`) | GPL-2.0 | `.github/actions/governor/patches/vorpal/rfx_gki510_compat.c` |
-| Bara-no-Seidou CPUFreq governor | kusonekoworld-max (koneko_dev) | MomenToMoiX-Kernel-GKI (intro `aeacdbf`, 2026-07-30) — header: `Copyright (C) 2026 kusonekoworld-max` | GPL-2.0 | `.github/actions/governor/patches/bara-no-seidou/` |
-| fair.c gaming-mode bias (`sched_gaming_active`) | MomenToMoiX project (koneko_dev) | MomenToMoiX-Kernel-GKI | GPL-2.0 | `.github/actions/governor/action.yml` (fair.c step) |
-| MomenToMoiX (Tenebrion) driver | koneko_dev | MomenToMoiX-Kernel-GKI | GPL-2.0 | `.github/actions/momentx/patches/tenebrion/MomenToMoiX.c` |
-| Tenebrion SELinux rules | Kanagawa Yamada (LoggingNewMemory) — header: `Author: Kanagawa Yamada`, adapted from the SuiKernel pattern | MomenToMoiX-Kernel-GKI | GPL-2.0 | `.github/actions/momentx/patches/tenebrion/selinux.sh` |
-| Composite-action packaging layer (governor / momentx) | Nao-YM | [Nao-YM/GKI_KernelSU_SUSFS](https://github.com/Nao-YM/GKI_KernelSU_SUSFS) (`a60fcf3f`, `f1c0fc5f`, `69a2d582`, `25ae398b`) | GPL-2.0 | `.github/actions/{governor,momentx}/action.yml` |
+| BORE scheduler patches | Masahito Suzuki (firelzrd) | [firelzrd/bore-scheduler](https://github.com/firelzrd/bore-scheduler) | GPL-2.0 | `patches/bore/` (+ `patches/bore/legacy/`) |
+| BORE KMI/KABI relocation scripts | TheWildJames (WildKernels) | [WildKernels/GKI_KernelSU_SUSFS](https://github.com/WildKernels/GKI_KernelSU_SUSFS) (`27cb8b3e`, `eba7eac4`, `c606cc2a`, `06488106`) | GPL-2.0 | `scripts/bore*.py` |
+| BORE composite action (version map, retry + git fallback) | TheWildJames (WildKernels) | WildKernels/GKI_KernelSU_SUSFS (`27cb8b3e` `feat(bore): BORE scheduler for all GKI families`) | GPL-2.0 | `scripts/bore_*.sh` wrappers (step bodies byte-verbatim) |
+| Reflex CPUFreq governor | Masahito Suzuki (firelzrd) | [firelzrd/reflex](https://github.com/firelzrd/reflex) — header: `Copyright (C) 2026 Masahito Suzuki` | GPL-2.0 | `patches/reflex/0001-cpufreq-reflex-governor.patch` |
+| Vorpal CPUFreq Governor v2.0 (Perfect Gaming & Thermal Edition) | Templar Dev (Steambot12) | via [kusonekoworld-max/MomenToMoiX-Kernel-GKI](https://github.com/kusonekoworld-max/MomenToMoiX-Kernel-GKI) — header: `Author: Templar Dev (Steambot12)` | GPL-2.0 | `patches/vorpal/0001-cpufreq-vorpal-governor-gki510-compat.patch` |
+| GKI compat shim (`rfx_gki510_compat.c`) | Nao-YM (GKI port artifact) | [Nao-YM/GKI_KernelSU_SUSFS](https://github.com/Nao-YM/GKI_KernelSU_SUSFS) (`a60fcf3f`) | GPL-2.0 | (same vorpal patch) |
+| Bara-no-Seidou CPUFreq governor | kusonekoworld-max (koneko_dev) | MomenToMoiX-Kernel-GKI (intro `aeacdbf`, 2026-07-30) — header: `Copyright (C) 2026 kusonekoworld-max` | GPL-2.0 | `patches/bara-no-seidou/0001-cpufreq-bara-no-seidou-governor.patch` |
+| fair.c gaming-mode bias (`sched_gaming_active`) | MomenToMoiX project (koneko_dev) | MomenToMoiX-Kernel-GKI | GPL-2.0 | `patches/gaming-bias/0001-fair-c-gaming-mode-bias.patch` (EEVDF 6.6 anchor port) |
+| MomenToMoiX (Tenebrion) driver | koneko_dev | MomenToMoiX-Kernel-GKI | GPL-2.0 | `patches/momentx/0001-momx-tenebrion-qos-driver.patch` |
+| Tenebrion SELinux rules | Kanagawa Yamada (LoggingNewMemory) — header: `Author: Kanagawa Yamada`, adapted from the SuiKernel pattern | MomenToMoiX-Kernel-GKI | GPL-2.0 | `scripts/selinux.sh` |
+| Composite-action packaging layer (governor / momentx) | Nao-YM | [Nao-YM/GKI_KernelSU_SUSFS](https://github.com/Nao-YM/GKI_KernelSU_SUSFS) (`a60fcf3f`, `f1c0fc5f`, `69a2d582`, `25ae398b`) | GPL-2.0 | superseded by the generic applier on `main-chandr1000` (`.github/actions/feature-patches/`) |
 
 > [!IMPORTANT]
 > If we have used your code and not credited you correctly, or have listed the wrong license, please let us know — open an issue or reach out and we'll fix it promptly. No omission is intentional; we want to credit everyone properly.
