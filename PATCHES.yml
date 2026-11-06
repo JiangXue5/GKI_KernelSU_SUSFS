@@ -52,6 +52,19 @@ patches:
       out-of-line burst state via bore66_state/flat, decl hoists, GKI
       sysctl repair — scripts/bore_66_apply.sh) and applies under strict
       git apply. KMI stays stock via the DroidSpaces slot-merge.
+      INCIDENT RUN 42292466832 (round 2): the task_struct hunk anchored
+      its trailing context on ANDROID_KABI_RESERVE(6)/(7)/(8) — exactly
+      the lines DroidSpaces' sysvipc KABI fix
+      (001.GKI-below-6.12-fix_sysvipc_kabi_6_7_8.patch, workflow step 26)
+      converts to `#ifdef CONFIG_SYSVIPC` ANDROID_KABI_USE/_REPLACE
+      before this applier runs, so the 9-line pre-image no longer existed
+      and git apply --check failed while D19 (declared pristine base)
+      stayed green. group_burst moved to KABI slots 1/2: the hunk now
+      replaces RESERVE(1)/(2) and keeps RESERVE(3)/(4)/(5) as trailing
+      context — byte-identical pre- and post-DroidSpaces, so one hunk
+      serves both the D19 base and the runtime tree (both verified).
+      task_struct slot map: 1/2 BORE group_burst, 3/4/5 free, 6/7/8
+      DroidSpaces sysvipc; sched_entity 1-4 BORE.
 
   - id: bore-scheduler-66-510            # 6.6 ALTERNATIVE variant (5.1.0 generation)
     enabled: false                       # A/B: enable this, disable bore-scheduler

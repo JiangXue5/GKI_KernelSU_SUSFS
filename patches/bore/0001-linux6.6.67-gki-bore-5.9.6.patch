@@ -99,26 +99,24 @@ index 8a06cb7..028053d 100644
  };
  
  struct sched_rt_entity {
-@@ -1518,9 +1547,19 @@ struct task_struct {
+@@ -1518,6 +1547,15 @@ struct task_struct {
  #endif
- 	ANDROID_KABI_RESERVE(1);
- 	ANDROID_KABI_RESERVE(2);
+-	ANDROID_KABI_RESERVE(1);
+-	ANDROID_KABI_RESERVE(2);
 +#ifdef CONFIG_SCHED_BORE
-+	/* bore-kabi: 6.6 burst state in KABI slots (DroidSpaces method) */
++	/* bore-kabi: burst state in KABI slots 1-2 (DroidSpaces sysvipc owns 6-8) */
 +	_ANDROID_KABI_REPLACE(
-+		ANDROID_KABI_RESERVE(3);
-+		ANDROID_KABI_RESERVE(4);
-+		ANDROID_KABI_RESERVE(5),
++		ANDROID_KABI_RESERVE(1);
++		ANDROID_KABI_RESERVE(2),
 +		struct sched_burst_cache group_burst;
 +	);
 +#else
++	ANDROID_KABI_RESERVE(1);
++	ANDROID_KABI_RESERVE(2);
++#endif
  	ANDROID_KABI_RESERVE(3);
  	ANDROID_KABI_RESERVE(4);
  	ANDROID_KABI_RESERVE(5);
-+#endif
- 	ANDROID_KABI_RESERVE(6);
- 	ANDROID_KABI_RESERVE(7);
- 	ANDROID_KABI_RESERVE(8);
 diff --git a/include/linux/sched/bore.h b/include/linux/sched/bore.h
 new file mode 100644
 index 0000000..32f15d7
