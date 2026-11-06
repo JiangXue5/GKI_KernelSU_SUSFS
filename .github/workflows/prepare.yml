@@ -106,6 +106,21 @@ on:
         required: false
         type: string
         default: ""
+      abi_gate:
+        description: "ABI gate mode forwarded to build.yml: warn (default) | enforce | off"
+        required: false
+        type: string
+        default: "warn"
+      abi_gate_fail_on_new:
+        description: "ABI gate: also fail on new exported symbols (pure-build leak canary)"
+        required: false
+        type: boolean
+        default: false
+      bore_variant:
+        description: "BORE patch generation for 6.6 legs: 5.9.6 (default) or 5.1.0"
+        required: false
+        type: string
+        default: "5.9.6"
 
 jobs:
   generate-matrix:
@@ -360,5 +375,8 @@ jobs:
       page_size: ${{ inputs.page_size }}
       google_backport: ${{ inputs.google_backport }}
       google_backport_ref: ${{ inputs.google_backport_ref }}
+      abi_gate: ${{ inputs.abi_gate }}
+      abi_gate_fail_on_new: ${{ inputs.abi_gate_fail_on_new }}
+      bore_variant: ${{ inputs.bore_variant }}
       stock_config_artifact: stock-configs-${{ needs.generate-matrix.outputs.version_slug }}
     secrets: inherit

@@ -127,6 +127,39 @@ on:
         required: false
         type: string
         default: ""
+      use_bore:
+        description: "BORE Scheduler (Part I)"
+        type: boolean
+        default: true
+      use_momentx:
+        description: "MomenToMoiX Drivers (Part I)"
+        type: boolean
+        default: true
+      use_governors:
+        description: "Governors: Reflex / Vorpal / Bara-no-Seidou + fair.c gaming bias (Part I)"
+        type: boolean
+        default: true
+      bore_variant:
+        description: "BORE patch generation for 6.6 legs: 5.9.6 (default) or 5.1.0"
+        required: false
+        type: choice
+        options:
+          - 5.9.6
+          - 5.1.0
+        default: 5.9.6
+      abi_gate:
+        description: "ABI gate (plan v2.2.0 §12): warn = report deltas, never block | enforce = fail on existing-symbol CRC delta vs this run's pristine baseline | off = skip baseline build + gate"
+        required: false
+        type: choice
+        options:
+          - warn
+          - enforce
+          - off
+        default: warn
+      abi_gate_fail_on_new:
+        description: "ABI gate: also fail on new exported symbols (pure-build leak canary, D9; keep false for feature builds)"
+        type: boolean
+        default: false
       kernel_runner:
         description: "Runner image for the build legs (ubuntu-24.04 = default, ubuntu-latest = newer image A/B)"
         type: choice
@@ -515,12 +548,15 @@ jobs:
             F_SUSFS=true;  F_NOMOUNT=true; F_BBG=true;  F_NET=true
             F_DS=true;     F_NTSYNC=true;  F_PTRACE=true; F_UNICODE=true
             F_BPF=true;    F_PERF=false
+            F_BORE=true;   F_MOMX=true;     F_GOV=true
           else
             F_SUSFS="${{ inputs.use_susfs }}";   F_NOMOUNT="${{ inputs.use_nomount }}"
             F_BBG="${{ inputs.use_bbg }}";        F_NET="${{ inputs.use_net }}"
             F_DS="${{ inputs.use_ds }}";          F_NTSYNC="${{ inputs.use_ntsync }}"
             F_PTRACE="${{ inputs.use_ptrace }}";  F_UNICODE="${{ inputs.use_unicode }}"
             F_BPF="${{ inputs.use_bpf }}";        F_PERF="${{ inputs.use_perf }}"
+            F_BORE="${{ inputs.use_bore }}";      F_MOMX="${{ inputs.use_momentx }}"
+            F_GOV="${{ inputs.use_governors }}"
           fi
 
           FEATURES=""
@@ -534,6 +570,9 @@ jobs:
           [ "$F_UNICODE" = "true" ] && FEATURES="${FEATURES}Unicode+"
           [ "$F_BPF" = "true" ] && FEATURES="${FEATURES}BPF+"
           [ "$F_PERF" = "true" ] && FEATURES="${FEATURES}Perf+"
+          [ "$F_BORE" = "true" ] && FEATURES="${FEATURES}BORE+"
+          [ "$F_MOMX" = "true" ] && FEATURES="${FEATURES}MOMX+"
+          [ "$F_GOV" = "true" ] && FEATURES="${FEATURES}GOV+"
           echo "feature_set=${FEATURES%+}" >> "$GITHUB_OUTPUT"
 
       - name: Clone shared source repos once
@@ -672,6 +711,9 @@ jobs:
       allow_version_mismatch: ${{ inputs.allow_version_mismatch || false }}
       use_cache: ${{ inputs.use_cache }}
       page_size: ${{ inputs.page_size || '4k' }}
+      abi_gate: ${{ inputs.abi_gate || 'warn' }}
+      abi_gate_fail_on_new: ${{ inputs.abi_gate_fail_on_new || false }}
+      bore_variant: ${{ inputs.bore_variant || '5.9.6' }}
     secrets: inherit
 
   build-android13-5-10:
@@ -704,6 +746,9 @@ jobs:
       allow_version_mismatch: ${{ inputs.allow_version_mismatch || false }}
       use_cache: ${{ inputs.use_cache }}
       page_size: ${{ inputs.page_size || '4k' }}
+      abi_gate: ${{ inputs.abi_gate || 'warn' }}
+      abi_gate_fail_on_new: ${{ inputs.abi_gate_fail_on_new || false }}
+      bore_variant: ${{ inputs.bore_variant || '5.9.6' }}
     secrets: inherit
 
   build-android13-5-15:
@@ -736,6 +781,9 @@ jobs:
       allow_version_mismatch: ${{ inputs.allow_version_mismatch || false }}
       use_cache: ${{ inputs.use_cache }}
       page_size: ${{ inputs.page_size || '4k' }}
+      abi_gate: ${{ inputs.abi_gate || 'warn' }}
+      abi_gate_fail_on_new: ${{ inputs.abi_gate_fail_on_new || false }}
+      bore_variant: ${{ inputs.bore_variant || '5.9.6' }}
     secrets: inherit
 
   build-android14-5-15:
@@ -768,6 +816,9 @@ jobs:
       allow_version_mismatch: ${{ inputs.allow_version_mismatch || false }}
       use_cache: ${{ inputs.use_cache }}
       page_size: ${{ inputs.page_size || '4k' }}
+      abi_gate: ${{ inputs.abi_gate || 'warn' }}
+      abi_gate_fail_on_new: ${{ inputs.abi_gate_fail_on_new || false }}
+      bore_variant: ${{ inputs.bore_variant || '5.9.6' }}
     secrets: inherit
 
   build-android14-6-1:
@@ -800,6 +851,9 @@ jobs:
       allow_version_mismatch: ${{ inputs.allow_version_mismatch || false }}
       use_cache: ${{ inputs.use_cache }}
       page_size: ${{ inputs.page_size || '4k' }}
+      abi_gate: ${{ inputs.abi_gate || 'warn' }}
+      abi_gate_fail_on_new: ${{ inputs.abi_gate_fail_on_new || false }}
+      bore_variant: ${{ inputs.bore_variant || '5.9.6' }}
     secrets: inherit
 
   build-android15-6-6:
@@ -834,6 +888,9 @@ jobs:
       page_size: ${{ inputs.page_size || '4k' }}
       google_backport: ${{ inputs.use_google_backport || false }}
       google_backport_ref: ${{ inputs.google_backport_ref }}
+      abi_gate: ${{ inputs.abi_gate || 'warn' }}
+      abi_gate_fail_on_new: ${{ inputs.abi_gate_fail_on_new || false }}
+      bore_variant: ${{ inputs.bore_variant || '5.9.6' }}
     secrets: inherit
 
   build-android16-6-12:
@@ -866,6 +923,9 @@ jobs:
       allow_version_mismatch: ${{ inputs.allow_version_mismatch || false }}
       use_cache: ${{ inputs.use_cache }}
       page_size: ${{ inputs.page_size || '4k' }}
+      abi_gate: ${{ inputs.abi_gate || 'warn' }}
+      abi_gate_fail_on_new: ${{ inputs.abi_gate_fail_on_new || false }}
+      bore_variant: ${{ inputs.bore_variant || '5.9.6' }}
     secrets: inherit
 
   telegram-announce:
