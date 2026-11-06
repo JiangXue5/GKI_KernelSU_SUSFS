@@ -32,6 +32,16 @@ runs:
       run: |
         set -euo pipefail
         TARGET_DIR="$GITHUB_WORKSPACE/kernel/common"
+        # Governor floor: sched_cpu_util() first exists in 5.15 and loses
+        # its capacity argument in 6.1 (handled inside the sources). On
+        # 5.10 it does not exist at all — warn + skip (plan D2/D3 probe
+        # policy; recorded in PATCHES.yml kernels fields).
+        GOV_MAJ="$(sed -n 's/^VERSION *= *//p' $TARGET_DIR/Makefile | head -n1)"
+        GOV_MIN="$(sed -n 's/^PATCHLEVEL *= *//p' $TARGET_DIR/Makefile | head -n1)"
+        if [ -z "${GOV_MAJ:-}" ] || [ "${GOV_MAJ}" -lt 5 ] || { [ "${GOV_MAJ}" -eq 5 ] && [ "${GOV_MIN}" -lt 15 ]; }; then
+          echo "::warning::Governors unsupported on Linux ${GOV_MAJ:-?}.${GOV_MIN:-?} (need >= 5.15): skipping this step (D2/D3)." >&2
+          exit 0
+        fi
 
         mkdir -p "$TARGET_DIR/kernel/sched"
         cp "${{ github.action_path }}/patches/reflex/cpufreq_reflex.c" "$TARGET_DIR/kernel/sched/cpufreq_reflex.c"
@@ -56,6 +66,16 @@ runs:
       run: |
         set -euo pipefail
         TARGET_DIR="$GITHUB_WORKSPACE/kernel/common"
+        # Governor floor: sched_cpu_util() first exists in 5.15 and loses
+        # its capacity argument in 6.1 (handled inside the sources). On
+        # 5.10 it does not exist at all — warn + skip (plan D2/D3 probe
+        # policy; recorded in PATCHES.yml kernels fields).
+        GOV_MAJ="$(sed -n 's/^VERSION *= *//p' $TARGET_DIR/Makefile | head -n1)"
+        GOV_MIN="$(sed -n 's/^PATCHLEVEL *= *//p' $TARGET_DIR/Makefile | head -n1)"
+        if [ -z "${GOV_MAJ:-}" ] || [ "${GOV_MAJ}" -lt 5 ] || { [ "${GOV_MAJ}" -eq 5 ] && [ "${GOV_MIN}" -lt 15 ]; }; then
+          echo "::warning::Governors unsupported on Linux ${GOV_MAJ:-?}.${GOV_MIN:-?} (need >= 5.15): skipping this step (D2/D3)." >&2
+          exit 0
+        fi
 
         mkdir -p "$TARGET_DIR/kernel/sched"
         cp "${{ github.action_path }}/patches/vorpal/cpufreq_vorpal.c" "$TARGET_DIR/kernel/sched/cpufreq_vorpal.c"
@@ -85,6 +105,16 @@ runs:
       working-directory: ${{ github.workspace }}/kernel/common
       run: |
         set -euo pipefail
+        # Governor floor: sched_cpu_util() first exists in 5.15 and loses
+        # its capacity argument in 6.1 (handled inside the sources). On
+        # 5.10 it does not exist at all — warn + skip (plan D2/D3 probe
+        # policy; recorded in PATCHES.yml kernels fields).
+        GOV_MAJ="$(sed -n 's/^VERSION *= *//p' Makefile | head -n1)"
+        GOV_MIN="$(sed -n 's/^PATCHLEVEL *= *//p' Makefile | head -n1)"
+        if [ -z "${GOV_MAJ:-}" ] || [ "${GOV_MAJ}" -lt 5 ] || { [ "${GOV_MAJ}" -eq 5 ] && [ "${GOV_MIN}" -lt 15 ]; }; then
+          echo "::warning::Governors unsupported on Linux ${GOV_MAJ:-?}.${GOV_MIN:-?} (need >= 5.15): skipping this step (D2/D3)." >&2
+          exit 0
+        fi
         VORPAL_C="kernel/sched/cpufreq_vorpal.c"
 
         if ! grep -q "bool input_ok;" "$VORPAL_C"; then
@@ -118,6 +148,16 @@ runs:
       run: |
         set -euo pipefail
         TARGET_DIR="$GITHUB_WORKSPACE/kernel/common"
+        # Governor floor: sched_cpu_util() first exists in 5.15 and loses
+        # its capacity argument in 6.1 (handled inside the sources). On
+        # 5.10 it does not exist at all — warn + skip (plan D2/D3 probe
+        # policy; recorded in PATCHES.yml kernels fields).
+        GOV_MAJ="$(sed -n 's/^VERSION *= *//p' $TARGET_DIR/Makefile | head -n1)"
+        GOV_MIN="$(sed -n 's/^PATCHLEVEL *= *//p' $TARGET_DIR/Makefile | head -n1)"
+        if [ -z "${GOV_MAJ:-}" ] || [ "${GOV_MAJ}" -lt 5 ] || { [ "${GOV_MAJ}" -eq 5 ] && [ "${GOV_MIN}" -lt 15 ]; }; then
+          echo "::warning::Governors unsupported on Linux ${GOV_MAJ:-?}.${GOV_MIN:-?} (need >= 5.15): skipping this step (D2/D3)." >&2
+          exit 0
+        fi
 
         # Bara-no-Seidou consumes sched_gaming_active, defined by the
         # rfx_gki510_compat shim (vorpal commit). Skip gracefully when the
@@ -160,6 +200,16 @@ runs:
       working-directory: ${{ github.workspace }}/kernel/common
       run: |
         set -euo pipefail
+        # Governor floor: sched_cpu_util() first exists in 5.15 and loses
+        # its capacity argument in 6.1 (handled inside the sources). On
+        # 5.10 it does not exist at all — warn + skip (plan D2/D3 probe
+        # policy; recorded in PATCHES.yml kernels fields).
+        GOV_MAJ="$(sed -n 's/^VERSION *= *//p' Makefile | head -n1)"
+        GOV_MIN="$(sed -n 's/^PATCHLEVEL *= *//p' Makefile | head -n1)"
+        if [ -z "${GOV_MAJ:-}" ] || [ "${GOV_MAJ}" -lt 5 ] || { [ "${GOV_MAJ}" -eq 5 ] && [ "${GOV_MIN}" -lt 15 ]; }; then
+          echo "::warning::Governors unsupported on Linux ${GOV_MAJ:-?}.${GOV_MIN:-?} (need >= 5.15): skipping this step (D2/D3)." >&2
+          exit 0
+        fi
         FAIR_C="kernel/sched/fair.c"
 
         # The bias only links when something defines sched_gaming_active; the

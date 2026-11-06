@@ -30,6 +30,17 @@
  */
 
 #include "sched.h"
+
+/* kernel/sched/sched.h calls account_group_exec_runtime() from the stock
+ * update_current_exec_runtime() inline; the definition lives in
+ * <linux/sched/cputime.h>, which kernel/sched/*.c include on their own
+ * (see fair.c) — sched.h itself does not. Without this include every TU
+ * that pulls in "sched.h" fails to compile on 6.6.77-class trees
+ * (run 114269594026, android15-6.6 build #2).
+ */
+#include <linux/sched/cputime.h>
+#include <linux/version.h>
+
 #include <linux/export.h>
 #include <linux/sched/cpufreq.h>
 
@@ -62,7 +73,12 @@ void rfx_get_util_gki510(int cpu, unsigned long boost,
 	 * derives cfs util internally. No separate cpu_util_cfs()/raw_util
 	 * or FREQUENCY_UTIL enum needed here anymore.
 	 */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 0)
+	/* 6.1+ derives the capacity internally (sched_cpu_util(int)). */
+	u = sched_cpu_util(cpu);
+#else
 	u = sched_cpu_util(cpu, max_cap);
+#endif
 	u = max(u, boost);
 	if (u > max_cap)
 		u = max_cap;
