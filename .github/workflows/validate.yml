@@ -2,7 +2,7 @@ name: Validate
 
 on:
   push:
-    branches: [main, dev]
+    branches: [main, dev, feature/patches]
   pull_request:
     branches: [main, dev]
   workflow_dispatch:
@@ -10,6 +10,7 @@ on:
 jobs:
   validate:
     name: Validate workflows, shell scripts, and Python syntax
+    if: github.ref != 'refs/heads/feature/patches'
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout repository
@@ -31,3 +32,139 @@ jobs:
 
       - name: Validate Python syntax
         run: python3 .github/scripts/validate_python.py
+
+  # D19 (plan v3.0.0 §3.6): a broken hunk dies HERE, in a ~2-minute job on
+  # the content branch - never as the third round of a 20-minute kernel
+  # build (RC3). Mirrors the applier's semantics (strict git apply, D15;
+  # kernels gate from the base tree's Makefile, D18; best_effort warn+skip,
+  # D16) against the DECLARED series base.
+  patches-apply-check:
+    name: Validate feature-patches series (strict apply vs declared base)
+    if: github.ref == 'refs/heads/feature/patches' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Fetch the content branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone -q --depth=1 --filter=blob:none --no-checkout \
+            "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git" content
+          git -C content fetch -q --depth=1 origin feature/patches
+          git -C content checkout -q --detach FETCH_HEAD
+          echo "content @ $(git -C content rev-parse --short=12 HEAD)"
+
+      - name: Validate manifest parse rules
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -c 'import yaml' 2>/dev/null || pip install -q pyyaml
+          python3 <<'PYEOF'
+          import yaml, os, sys
+          m = yaml.safe_load(open("content/PATCHES.yml"))
+          entries = m.get("patches") or []
+          ids = [e["id"] for e in entries]
+          assert len(ids) == len(set(ids)), "duplicate entry ids"
+          idx = {eid: i for i, eid in enumerate(ids)}
+          for e in entries:
+              for d in e.get("depends_on") or []:
+                  assert d in idx, f"{e['id']}: unknown dep {d}"
+                  assert idx[d] < idx[e["id"]], f"{e['id']}: dep {d} must precede it"
+              if e.get("kind", "patch") == "patch":
+                  assert os.path.exists(os.path.join("content", e["patch"])), f"{e['id']}: patch missing"
+              else:
+                  assert os.path.exists(os.path.join("content", e["script"])), f"{e['id']}: script missing"
+              for k in e.get("kernels") or []:
+                  assert isinstance(k, str), f"{e['id']}: kernels must be quoted strings (YAML float trap: 5.10 -> 5.1)"
+          print(f"manifest OK: {len(entries)} entries, parse rules clean")
+          PYEOF
+
+      - name: Syntax-check content scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          rc=0
+          for s in content/scripts/*.sh; do
+            bash -n "$s" || { echo "::error::bash -n failed: $s"; rc=1; }
+          done
+          for p in content/scripts/*.py; do
+            python3 -m py_compile "$p" || { echo "::error::py_compile failed: $p"; rc=1; }
+          done
+          exit $rc
+
+      - name: Fetch the declared base kernel tree (sparse)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # series.base text e.g. "android15-6.6 @ 6.6.77 (android15-2025-03)"
+          TAGGED=$(python3 -c "import yaml,re; s=yaml.safe_load(open('content/PATCHES.yml'))['series']['base']; print(re.search(r'\(([^)]+)\)', s).group(1))")
+          BR="$TAGGED"
+          git clone -q --depth=1 --filter=blob:none --no-checkout \
+            https://android.googlesource.com/kernel/common base || true
+          if [ ! -d base ]; then
+            echo "clone failed; retrying with deprecated/ branch form"
+            git clone -q --depth=1 --filter=blob:none --no-checkout \
+              -b "deprecated/$TAGGED" https://android.googlesource.com/kernel/common base
+          else
+            if ! git -C base checkout -q "$TAGGED" 2>/dev/null; then
+              echo "branch $TAGGED retired upstream; using deprecated/$TAGGED"
+              git -C base fetch -q --depth=1 origin "deprecated/$TAGGED"
+              git -C base checkout -q --detach FETCH_HEAD
+            fi
+          fi
+          # sparse to the union of paths the series touches
+          PATHS=$(grep -hE '^\+\+\+ b/' content/patches/*/*.patch content/patches/*/*/*.patch 2>/dev/null \
+                  | sed 's|^+++ b/||; s|/[^/]*$||' | sort -u \
+                  | grep -v -E '^(localversion)$' | sed 's|^|/|; s|$|/|' | head -100)
+          echo "/Makefile" > base/.git/info/sparse-checkout
+          for p in $PATHS; do echo "$p" >> base/.git/info/sparse-checkout; done
+          git -C base checkout -q
+          KVER="$(sed -n 's/^VERSION *= *//p' base/Makefile).$(sed -n 's/^PATCHLEVEL *= *//p' base/Makefile)"
+          echo "base=$TAGGED kernel=$KVER"
+          echo "KVER=$KVER" >> "$GITHUB_ENV"
+
+      - name: Strict cumulative apply of the enabled series (applier semantics)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PYEOF'
+          import yaml, os, subprocess, sys, glob
+
+          kver = os.environ["KVER"]
+          m = yaml.safe_load(open("content/PATCHES.yml"))
+          entries = m["patches"]
+
+          def git(args, check=True):
+              r = subprocess.run(["git"] + args, cwd="base", capture_output=True, text=True)
+              if check and r.returncode != 0:
+                  raise RuntimeError(f"git {' '.join(args)}: {r.stderr.strip()[:300]}")
+              return r
+
+          rows, fails = [], []
+          for e in entries:
+              eid = e["id"]
+              fams = [(f"{k:g}" if isinstance(k, float) else str(k)) for k in (e.get("kernels") or [])]
+              if e.get("enabled", True) is False:
+                  rows.append((eid, "skip: disabled")); continue
+              if fams and kver not in fams:
+                  rows.append((eid, f"skip: kernels gate ({kver} not in {fams})")); continue
+              try:
+                  if e.get("kind", "patch") == "patch":
+                      p = os.path.join("content", e["patch"])
+                      git(["apply", "--check", p]); git(["apply", p])
+                      rows.append((eid, "applied"))
+                  else:
+                      rows.append((eid, "skip: script entry (runtime-only; syntax-checked above)"))
+              except RuntimeError as ex:
+                  be = e.get("best_effort", False)
+                  rows.append((eid, f"{'FAILED (best_effort - warn)' if be else 'FAILED (strict)'}: {str(ex)[:120]}"))
+                  if not be: fails.append(eid)
+
+          lines = ["## patches-apply-check (declared base " + kver + ")", "", "| id | verdict |", "|---|---|"]
+          for eid, v in rows: lines.append(f"| {eid} | {v} |")
+          if os.environ.get("GITHUB_STEP_SUMMARY"):
+              open(os.environ["GITHUB_STEP_SUMMARY"], "a").write("\n".join(lines) + "\n")
+          for eid, v in rows: print(f"  {eid}: {v}")
+          if fails:
+              sys.exit(f"STRICT APPLY FAILURES: {', '.join(fails)}")
+          print(f"series OK on {kver}")
+          PYEOF
