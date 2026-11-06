@@ -56,6 +56,16 @@
  */
 #include "sched.h"
 
+/* kernel/sched/sched.h calls account_group_exec_runtime() from the stock
+ * update_current_exec_runtime() inline; the definition lives in
+ * <linux/sched/cputime.h>, which kernel/sched/*.c include on their own
+ * (see fair.c) — sched.h itself does not. Without this include every TU
+ * that pulls in "sched.h" fails to compile on 6.6.77-class trees
+ * (run 114269594026, android15-6.6 build #2).
+ */
+#include <linux/sched/cputime.h>
+#include <linux/version.h>
+
 extern int sched_gaming_active;
 
 /* ---- Defaults (overridable at runtime via sysfs) --------------------- */
@@ -878,7 +888,12 @@ static void bara_no_seidou_update_single_cpu(struct bara_no_seidou_cpu *gd_cpu,
 	boost = bara_no_seidou_iowait_apply(gd_cpu, time, max);
 	gd_cpu->last_update = time;
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 0)
+	/* 6.1+ derives the capacity internally (sched_cpu_util(int)). */
+	util = sched_cpu_util(gd_cpu->cpu);
+#else
 	util = sched_cpu_util(gd_cpu->cpu, max);
+#endif
 	util = max(util, boost);
 	util = bara_no_seidou_ema_smooth(gd_cpu, util);
 

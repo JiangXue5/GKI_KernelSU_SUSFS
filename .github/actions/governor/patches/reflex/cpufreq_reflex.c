@@ -22,6 +22,16 @@
 
 #include "sched.h"
 
+/* kernel/sched/sched.h calls account_group_exec_runtime() from the stock
+ * update_current_exec_runtime() inline; the definition lives in
+ * <linux/sched/cputime.h>, which kernel/sched/*.c include on their own
+ * (see fair.c) — sched.h itself does not. Without this include every TU
+ * that pulls in "sched.h" fails to compile on 6.6.77-class trees
+ * (run 114269594026, android15-6.6 build #2).
+ */
+#include <linux/sched/cputime.h>
+#include <linux/version.h>
+
 #include <linux/cpufreq.h>
 #include <linux/init.h>
 #include <linux/irq_work.h>
@@ -313,10 +323,18 @@ static unsigned int rfx_get_next_freq(struct rfx_policy *rfx_pol,
 static void rfx_get_util(struct rfx_cpu *rfx_c, unsigned long boost)
 {
 	struct rq *rq = cpu_rq(rfx_c->cpu);
-	unsigned long max_cap = arch_scale_cpu_capacity(rfx_c->cpu);
 
 	rfx_c->bw_min = cpu_bw_dl(rq);
-	rfx_c->util   = sched_cpu_util(rfx_c->cpu, max_cap);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 0)
+	/* 6.1+ derives the capacity internally (sched_cpu_util(int)). */
+	rfx_c->util   = sched_cpu_util(rfx_c->cpu);
+#else
+	{
+		unsigned long max_cap = arch_scale_cpu_capacity(rfx_c->cpu);
+
+		rfx_c->util   = sched_cpu_util(rfx_c->cpu, max_cap);
+	}
+#endif
 	rfx_c->util   = max(rfx_c->util, boost);
 }
 
