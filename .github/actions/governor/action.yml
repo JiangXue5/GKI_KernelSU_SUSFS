@@ -128,6 +128,68 @@ runs:
           exit 1
         fi
 
+    - name: 'Inject Gaming-Mode Bias into fair.c (best-effort)'
+      shell: bash
+      working-directory: ${{ github.workspace }}/kernel/common
+      run: |
+        set -euo pipefail
+        FAIR_C="kernel/sched/fair.c"
+
+        # The bias only links when something defines sched_gaming_active; the
+        # rfx_gki510_compat shim (vorpal commit) is the sole definer here.
+        if [ ! -f "${{ github.action_path }}/patches/vorpal/rfx_gki510_compat.c" ]; then
+          echo "WARNING: rfx_gki510_compat.c (compat shim, vorpal commit) not found; SKIPPING fair.c gaming bias." >&2
+          exit 0
+        fi
+
+        # Best-effort by design (plan decision D2): all five injections run
+        # against a TEMP copy and the result only replaces fair.c when every
+        # marker is present. On trees where an anchor drifted (future
+        # sublevels, BORE rewrites, non-Android bases) this step WARNs and
+        # SKIPS instead of failing the build - the governors remain fully
+        # functional without the bias (the shim still provides
+        # sched_gaming_active, vorpal/bara just idle in non-gaming mode).
+        TMP_FAIR="$(mktemp /tmp/fair.c.gaming.XXXXXX)"
+        cp "$FAIR_C" "$TMP_FAIR"
+
+        if ! grep -qF "extern int sched_gaming_active;" "$TMP_FAIR"; then
+          perl -0pi -e 's{(static unsigned int normalized_sysctl_sched_latency\s*=\s*6000000ULL;)}{$1\n\nextern int sched_gaming_active;\n\n#define GAMING_VRUNTIME_STRETCH\t\t4\n}' "$TMP_FAIR"
+        fi
+
+        if ! grep -qF "GAMING_VRUNTIME_STRETCH - 1" "$TMP_FAIR"; then
+          perl -0pi -e 's{(\tcurr->vruntime \+= calc_delta_fair\(delta_exec, curr\);\n)(\tupdate_min_vruntime\(cfs_rq\);\n)}{$1\n\tif (unlikely(sched_gaming_active \&\& !entity_is_task(curr))) {\n\t\tcurr->vruntime += calc_delta_fair(delta_exec * (GAMING_VRUNTIME_STRETCH - 1), curr);\n\t} else if (unlikely(sched_gaming_active \&\& entity_is_task(curr) \&\&\n\t\t\t     curr->avg.load_avg < 100)) {\n\t\tcurr->vruntime += calc_delta_fair(delta_exec, curr);\n\t}\n$2}' "$TMP_FAIR"
+        fi
+
+        if ! grep -qF "delta_exec > ideal_runtime / 2" "$TMP_FAIR"; then
+          perl -0pi -e 's{(\tdelta_exec = curr->sum_exec_runtime - curr->prev_sum_exec_runtime;\n)(\ttrace_android_rvh_check_preempt_tick)}{$1\n\tif (unlikely(sched_gaming_active) \&\& entity_is_task(curr)) {\n\t\tstruct task_struct *p = task_of(curr);\n\n\t\tif (p->static_prio > DEFAULT_PRIO \&\n\t\t    delta_exec > ideal_runtime / 2)\n\t\t\tresched_curr(rq_of(cfs_rq));\n\t}\n\n$2}' "$TMP_FAIR"
+        fi
+
+        if ! grep -qF "task_of(se)->static_prio <= DEFAULT_PRIO" "$TMP_FAIR"; then
+          perl -0pi -e 's{(\tfor_each_sched_entity\(se\) \{\n\t\tcfs_rq = cfs_rq_of\(se\);\n\n)(\t\tupdate_load_avg\(cfs_rq, se, UPDATE_TG\);\n\t\tse_update_runnable\(se\);\n\t\tupdate_cfs_group\(se\);)}{$1\t\tif (unlikely(sched_gaming_active \&\& entity_is_task(se) \&\&\n\t\t\t     task_of(se)->static_prio <= DEFAULT_PRIO))\n\t\t\tse->vruntime -= min_t(u64, se->vruntime, NSEC_PER_MSEC);\n\n$2}' "$TMP_FAIR"
+        fi
+
+        if ! grep -qF "Gaming task isolation" "$TMP_FAIR"; then
+          perl -0pi -e 's{(\tdelta = rq_clock_task\(env->src_rq\) - p->se\.exec_start;\n\n)(\treturn delta < \(s64\)sysctl_sched_migration_cost;\n\}\n)}{$1\t/* Gaming task isolation */\n\tif (sched_gaming_active) {\n\t\tif (capacity_orig_of(env->dst_cpu) < capacity_orig_of(env->src_cpu) \&\&\n\t\t    task_util(p) > (capacity_orig_of(env->src_cpu) >> 3))\n\t\t\treturn 1;\n\t\treturn delta < (s64)sysctl_sched_migration_cost * 2;\n\t}\n\n$2}' "$TMP_FAIR"
+        fi
+
+        MISSING=""
+        for MARK in "extern int sched_gaming_active;" "GAMING_VRUNTIME_STRETCH - 1" "delta_exec > ideal_runtime / 2" "task_of(se)->static_prio <= DEFAULT_PRIO" "Gaming task isolation"; do
+          if ! grep -qF "$MARK" "$TMP_FAIR"; then
+            MISSING="${MISSING}${MARK}\n"
+          fi
+        done
+        if [ -n "$MISSING" ]; then
+          echo "WARNING: fair.c does not match the expected anchors - SKIPPING gaming bias (best-effort mode, fair.c left untouched)." >&2
+          echo "Missing markers:" >&2
+          printf "${MISSING}" >&2
+          rm -f "$TMP_FAIR"
+          exit 0
+        fi
+
+        cat "$TMP_FAIR" > "$FAIR_C"
+        rm -f "$TMP_FAIR"
+        echo "fair.c gaming bias applied (all 5 markers verified)."
+
     - name: Enable Governors
       uses: ./.github/actions/set-kernel-config
       with:
