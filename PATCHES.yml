@@ -10,12 +10,14 @@
 #
 # Re-enable: revert the revert, or flip back to `true`.
 #
+# Plan: integration_plan_feature_patches.md (decisions D1..D8 — all recommendations)
+# Commit identity: Irina Shinakawa <25380803+chandr1000@users.noreply.github.com>
 
 series:
   branch: feature/patches
   base: main-chandr1000
   delivery: feature_patches.mbox          # apply with: git am --3way feature_patches.mbox
-  ci_wiring: deferred                     # build.yml steps to be added in a later series
+  ci_wiring: done                         # build.yml/main.yml/prepare.yml wired in the CI-wiring series (see infra entry below)
 
 patches:
   - id: bore-scheduler                    # commit 1
@@ -111,6 +113,26 @@ patches:
 
   # Commits 7 (per-governor enable inputs) and 8 (this file + THIRD_PARTY_NOTICES.md)
   # are series plumbing and have no enable/disable semantics of their own.
+
+infrastructure:
+  - id: abi-gate                          # CI-wiring series
+    kind: ci-guard
+    enabled: true                         # abi_gate dispatch input: warn | enforce | off (default warn, phase A per D11)
+    title: ABI gate — existing-symbol CRC zero-delta vs this run's pristine baseline
+    author: "Irina Shinakawa (chandr1000) — gate design + script originate from this repo's gki6677 work (G1 closed 2026-11-01)"
+    files: [.github/scripts/abi-gate.sh, .github/actions/build-kernel/action.yml (idempotency guard), .github/workflows/build.yml (two-phase wiring), .github/workflows/prepare.yml, .github/workflows/main.yml (input threading)]
+    kernels: [5.10, 5.15, 6.1, 6.6, 6.12]
+    dispatch: [abi_gate, abi_gate_fail_on_new]
+    notes: >
+      Two-tier design (plan v2.2.0 §12.4): Tier 1 (this runner) captures the
+      baseline per gated run from the pristine pre-feature tree and gates the
+      feature build against it — every delta is patch-induced by construction
+      (steady state: 0 drifted / 0 missing / <=3 new info). Tier 2 (pinned
+      gki<digits> branches) keeps the frozen-baseline + provenance-manifest
+      machinery. Baseline build adds one pristine compile per gated run;
+      abi_gate=off restores the single-build behavior with zero overhead.
+      New symbols are info-only on feature builds; abi_gate_fail_on_new
+      turns them into failures for pure variants (D9).
 
 attribution:
   license: GPL-2.0
