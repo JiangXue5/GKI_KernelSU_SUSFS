@@ -10,14 +10,14 @@
 #
 # Re-enable: revert the revert, or flip back to `true`.
 #
-# Plan: integration_plan_feature_patches.md (decisions D1..D8 — all recommendations)
+# Plan: integration_plan_feature_patches_v2.2.0.md (decisions D1..D14 — all recommendations)
 # Commit identity: Irina Shinakawa <25380803+chandr1000@users.noreply.github.com>
 
 series:
   branch: feature/patches
   base: main-chandr1000
   delivery: feature_patches.mbox          # apply with: git am --3way feature_patches.mbox
-  ci_wiring: done                         # build.yml/main.yml/prepare.yml wired in the CI-wiring series (see infra entry below)
+  ci_wiring: done                          # 4-commit wiring series on main-chandr1000; ABI gate live (see infrastructure below)
 
 patches:
   - id: bore-scheduler                    # commit 1
@@ -115,24 +115,37 @@ patches:
   # are series plumbing and have no enable/disable semantics of their own.
 
 infrastructure:
-  - id: abi-gate                          # CI-wiring series
+  - id: abi-gate                          # CI-wiring series (lives on main-chandr1000)
     kind: ci-guard
-    enabled: true                         # abi_gate dispatch input: warn | enforce | off (default warn, phase A per D11)
+    enabled: true                         # abi_gate dispatch input: warn (default, phase A per D11) | enforce | off; "+fail-new" suffix = D9 canary
     title: ABI gate — existing-symbol CRC zero-delta vs this run's pristine baseline
     author: "Irina Shinakawa (chandr1000) — gate design + script originate from this repo's gki6677 work (G1 closed 2026-11-01)"
     files: [.github/scripts/abi-gate.sh, .github/actions/build-kernel/action.yml (idempotency guard), .github/workflows/build.yml (two-phase wiring), .github/workflows/prepare.yml, .github/workflows/main.yml (input threading)]
     kernels: [5.10, 5.15, 6.1, 6.6, 6.12]
-    dispatch: [abi_gate, abi_gate_fail_on_new]
+    dispatch: [abi_gate]                  # single knob; suffix carries the old abi_gate_fail_on_new
     notes: >
-      Two-tier design (plan v2.2.0 §12.4): Tier 1 (this runner) captures the
-      baseline per gated run from the pristine pre-feature tree and gates the
-      feature build against it — every delta is patch-induced by construction
-      (steady state: 0 drifted / 0 missing / <=3 new info). Tier 2 (pinned
-      gki<digits> branches) keeps the frozen-baseline + provenance-manifest
-      machinery. Baseline build adds one pristine compile per gated run;
-      abi_gate=off restores the single-build behavior with zero overhead.
-      New symbols are info-only on feature builds; abi_gate_fail_on_new
-      turns them into failures for pure variants (D9).
+      Two-tier design (plan v2.2.0 §12.4): Tier 1 (the runner on
+      main-chandr1000) captures the baseline per gated run from the pristine
+      pre-feature tree and gates the feature build against it — every delta
+      is patch-induced by construction (steady state: 0 drifted / 0 missing /
+      <=3 new info). Tier 2 (pinned gki<digits> branches) keeps the
+      frozen-baseline + provenance-manifest machinery. Baseline build adds
+      one pristine compile per gated run; abi_gate=off restores the
+      single-build behavior with zero overhead. New symbols are info-only on
+      feature builds; the +fail-new suffix turns them into failures for pure
+      variants (D9).
+
+      Dispatch-surface note: main.yml hit GitHub's 25-input
+      workflow_dispatch cap, so the Part II knobs were consolidated in
+      the cap-fix series on main-chandr1000
+      (ci_25_input_dispatch_cap_fix.mbox) —
+      bore_variant absorbs use_bore (off | 5.9.6 | 5.1.0); google_backport
+      absorbs use_google_backport + google_backport_ref (off | auto | ref);
+      abi_gate absorbs abi_gate_fail_on_new via the "+fail-new" suffix — and
+      kernel_runner / test_release_notes moved to repo Actions variables
+      (KERNEL_RUNNER / TEST_RELEASE_NOTES). This manifest lives on
+      feature/patches only: the runner branch dropped it when the wiring
+      series landed, so this file remains the documentation of record.
 
 attribution:
   license: GPL-2.0
