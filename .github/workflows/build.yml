@@ -101,6 +101,21 @@ on:
         required: false
         type: string
         default: ""
+      abi_gate:
+        description: "ABI gate (plan v2.2.0 §12): warn = report deltas, never block | enforce = fail on existing-symbol CRC delta vs this run's pristine baseline | off = skip baseline build + gate (single build, zero overhead)"
+        required: false
+        type: string
+        default: "warn"
+      abi_gate_fail_on_new:
+        description: "ABI gate: also fail on NEW exported symbols (pure-build leak canary, D9; keep false for feature builds)"
+        required: false
+        type: boolean
+        default: false
+      bore_variant:
+        description: "BORE patch generation for 6.6 legs: 5.9.6 (default) or 5.1.0"
+        required: false
+        type: string
+        default: "5.9.6"
 
 jobs:
   build-gki:
@@ -1088,6 +1103,75 @@ jobs:
           version: ${{ inputs.version }}
           allow_version_mismatch: true
 
+      # --- ABI gate phase 1 (plan v2.2.0 §12.4): baseline build ----------
+      # Runs the full build once on the tree as Wild machinery left it
+      # (pre-features), so the ONLY delta vs the final build is the Part I
+      # feature steps below. With use_cache this reuses the restored warm
+      # cache; abi_gate: off skips it entirely (zero overhead).
+      - name: "ABI gate build #1: pristine-tree baseline (pre-features)"
+        if: inputs.abi_gate != 'off'
+        env:
+          SOURCE_DATE_EPOCH: ${{ env.SOURCE_DATE_EPOCH }}
+          KBUILD_BUILD_TIMESTAMP: ${{ env.KBUILD_BUILD_TIMESTAMP }}
+          KBUILD_BUILD_USER: ${{ env.WILD_BUILD_USER != '' && env.WILD_BUILD_USER || ((inputs.version == 'android15-6.6' || inputs.version == 'android16-6.12') && 'kleaf' || 'build-user') }}
+          KBUILD_BUILD_HOST: ${{ env.WILD_BUILD_HOST != '' && env.WILD_BUILD_HOST || 'build-host' }}
+        uses: ./.github/actions/build-kernel
+        with:
+          version: ${{ inputs.version }}
+          page_size: ${{ inputs.page_size }}
+          kbuild_build_user: ${{ env.WILD_BUILD_USER }}
+          kbuild_build_host: ${{ env.WILD_BUILD_HOST }}
+
+      - name: "ABI gate: capture baseline Module.symvers"
+        id: abi-baseline
+        if: inputs.abi_gate != 'off'
+        shell: bash
+        working-directory: ${{ github.workspace }}/kernel
+        run: |
+          set -euo pipefail
+          SYMVERS=""
+          for candidate in \
+            bazel-bin/common/kernel_aarch64/Module.symvers \
+            /home/runner/out/common/Module.symvers \
+            /home/runner/out/dist/Module.symvers; do
+            if [ -s "$candidate" ]; then SYMVERS="$candidate"; break; fi
+          done
+          if [ -z "$SYMVERS" ]; then
+            SYMVERS="$(find bazel-bin/common /home/runner/out -maxdepth 4 -name Module.symvers -type f 2>/dev/null | head -n1 || true)"
+          fi
+          if [ -z "$SYMVERS" ]; then
+            echo "ERROR: could not locate the baseline build's Module.symvers" >&2
+            exit 1
+          fi
+          echo "baseline Module.symvers: $SYMVERS"
+          mkdir -p "${{ github.workspace }}/abi-out"
+          bash "${{ github.workspace }}/.github/scripts/abi-gate.sh" capture "$SYMVERS" "${{ github.workspace }}/abi-out"
+          echo "ABI_BASELINE=${{ github.workspace }}/abi-out/Module.symvers.baseline" >> "$GITHUB_ENV"
+
+      # --- Part I feature series (plan §9 wiring point; repositioned after
+      # every Wild tree-modifying step so the ABI gate delta is exactly the
+      # feature series) ----------------------------------------------------
+      - name: Apply BORE Scheduler
+        if: contains(inputs.feature_set, 'BORE')
+        uses: ./.github/actions/bore
+        with:
+          kernel_version: ${{ inputs.kernel_version }}
+          sublevel: ${{ steps.extract.outputs.sublevel }}
+          variant: ${{ inputs.bore_variant }}
+
+      - name: Inject MomenToMoiX Drivers
+        if: contains(inputs.feature_set, 'MOMX')
+        uses: ./.github/actions/momentx
+
+      - name: Add Governors
+        if: contains(inputs.feature_set, 'GOV')
+        uses: ./.github/actions/governor
+        with:
+          reflex: 'true'
+          vorpal: 'true'
+          bara_no_seidou: 'true'
+          gaming_bias: 'true'
+
       - name: Build Normal Kernel
         env:
           SOURCE_DATE_EPOCH: ${{ env.SOURCE_DATE_EPOCH }}
@@ -1100,6 +1184,73 @@ jobs:
           page_size: ${{ inputs.page_size }}
           kbuild_build_user: ${{ env.WILD_BUILD_USER }}
           kbuild_build_host: ${{ env.WILD_BUILD_HOST }}
+
+      # --- ABI gate phase 2 (plan v2.2.0 §12.4): zero-delta check ---------
+      # Baseline = this run's pristine pre-feature build; current = the
+      # feature build above. warn mode reports loudly but never blocks
+      # (phase A); enforce fails the job (phase C, D11).
+      - name: "ABI gate: existing-symbol zero-delta check"
+        if: inputs.abi_gate != 'off'
+        shell: bash
+        working-directory: ${{ github.workspace }}/kernel
+        env:
+          ABI_GATE_MODE: ${{ inputs.abi_gate }}
+          ABI_GATE_FAIL_ON_NEW: ${{ inputs.abi_gate_fail_on_new }}
+        run: |
+          set -euo pipefail
+          ABI_DIR="${{ github.workspace }}/abi-out"
+          [ -s "$ABI_BASELINE" ] || { echo "ERROR: baseline missing ($ABI_BASELINE) — capture step did not run?" >&2; exit 1; }
+          FLAG=""
+          [ "$ABI_GATE_FAIL_ON_NEW" = "true" ] && FLAG="--fail-on-new"
+          SYMVERS=""
+          for candidate in \
+            bazel-bin/common/kernel_aarch64/Module.symvers \
+            /home/runner/out/common/Module.symvers \
+            /home/runner/out/dist/Module.symvers; do
+            if [ -s "$candidate" ]; then SYMVERS="$candidate"; break; fi
+          done
+          if [ -z "$SYMVERS" ]; then
+            SYMVERS="$(find bazel-bin/common /home/runner/out -maxdepth 4 -name Module.symvers -type f 2>/dev/null | head -n1 || true)"
+          fi
+          if [ -z "$SYMVERS" ]; then
+            echo "ERROR: could not locate the feature build's Module.symvers" >&2
+            exit 1
+          fi
+          echo "current Module.symvers: $SYMVERS"
+          set +e
+          bash "${{ github.workspace }}/.github/scripts/abi-gate.sh" $FLAG check \
+            "$ABI_BASELINE" "$SYMVERS" "$ABI_DIR/abi-delta.txt" 2>&1 | tee "$ABI_DIR/check.log"
+          RC="${PIPESTATUS[0]}"
+          set -e
+          {
+            echo "## ABI gate — $ABI_GATE_MODE mode"
+            echo
+            echo '```'
+            cat "$ABI_DIR/check.log"
+            echo '```'
+            echo "- policy: existing symbols zero-delta; new symbols $([ "$ABI_GATE_FAIL_ON_NEW" = "true" ] && echo 'FAIL (--fail-on-new)' || echo 'info only')"
+            echo "- baseline: \`$ABI_BASELINE\`"
+            echo "- current: \`$SYMVERS\`"
+            echo "- evidence: \`abi-delta.txt\` + \`check.log\` in the ABI-gate artifact"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$RC" -ne 0 ]; then
+            if [ "$ABI_GATE_MODE" = "enforce" ]; then
+              echo "::error::ABI gate FAIL (mode=enforce): missing symbol or CRC delta on an existing export vs this run's pristine baseline — see step summary and the ABI-gate artifact"
+              exit 1
+            fi
+            echo "::warning::ABI gate FAIL (mode=warn): missing symbol or CRC delta vs the pristine baseline — advisory only (phase A), see step summary and the ABI-gate artifact"
+            exit 0
+          fi
+          echo "ABI gate PASS (mode=$ABI_GATE_MODE)"
+
+      - name: Upload ABI gate evidence
+        if: always() && inputs.abi_gate != 'off'
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.extract.outputs.file_name }}-ABI-gate
+          path: abi-out/**
+          if-no-files-found: ignore
+          compression-level: 9
 
       - name: Get Cache Stats
         uses: ./.github/actions/cache-stats
