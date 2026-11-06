@@ -1,10 +1,33 @@
 name: 'Add Governors'
-description: 'Adds custom CPU frequency governors to the kernel'
+description: 'Adds custom CPU frequency governors (Reflex / Vorpal / Bara-no-Seidou) and the fair.c gaming-mode bias to the kernel'
+
+inputs:
+  reflex:
+    description: 'Inject the Reflex governor (default true; set false to skip)'
+    required: false
+    type: string
+    default: 'true'
+  vorpal:
+    description: 'Inject the Vorpal governor + rfx_gki510_compat shim (default true; set false to skip)'
+    required: false
+    type: string
+    default: 'true'
+  bara_no_seidou:
+    description: 'Inject the Bara-no-Seidou governor (default true; set false to skip; needs vorpal for the compat shim)'
+    required: false
+    type: string
+    default: 'true'
+  gaming_bias:
+    description: 'Inject the fair.c sched_gaming_active gaming bias (default true; auto-skips on non-matching trees; needs vorpal for the compat shim)'
+    required: false
+    type: string
+    default: 'true'
 
 runs:
   using: 'composite'
   steps:
     - name: 'Inject Reflex Governor'
+      if: inputs.reflex != 'false'
       shell: bash
       run: |
         set -euo pipefail
@@ -28,6 +51,7 @@ runs:
         fi
 
     - name: 'Inject Vorpal Governor + GKI510 Compat'
+      if: inputs.vorpal != 'false'
       shell: bash
       run: |
         set -euo pipefail
@@ -56,6 +80,7 @@ runs:
         fi
 
     - name: 'Fix Vorpal Input-Handler Init Bug'
+      if: inputs.vorpal != 'false'
       shell: bash
       working-directory: ${{ github.workspace }}/kernel/common
       run: |
@@ -88,6 +113,7 @@ runs:
         fi
 
     - name: 'Inject Bara-no-Seidou Governor'
+      if: inputs.bara_no_seidou != 'false'
       shell: bash
       run: |
         set -euo pipefail
@@ -129,6 +155,7 @@ runs:
         fi
 
     - name: 'Inject Gaming-Mode Bias into fair.c (best-effort)'
+      if: inputs.gaming_bias != 'false'
       shell: bash
       working-directory: ${{ github.workspace }}/kernel/common
       run: |
