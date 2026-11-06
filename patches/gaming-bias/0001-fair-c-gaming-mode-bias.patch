@@ -1,0 +1,96 @@
+From 72ffa492edd61c4c8083cbf3008de2c0ecec46f2 Mon Sep 17 00:00:00 2001
+From: Irina Shinakawa <25380803+chandr1000@users.noreply.github.com>
+Date: Fri, 6 Nov 2026 15:00:00 +0000
+Subject: [PATCH] feat(sched): fair.c gaming-mode bias via sched_gaming_active
+ (EEVDF-adapted)
+
+CFS gaming-mode bias: vruntime stretch, half-slice yield for
+normal-priority tasks, migration isolation for gaming foreground
+threads while sched_gaming_active is set.
+
+ANCHORS ADAPTED TO EEVDF (android15-6.6-2025-03): the upstream
+MomenToMoiX injection targeted pre-EEVDF shapes (check_preempt_tick,
+normalized_sysctl_sched_latency) that do not exist in 6.6.77 - the
+old warn+skip step never actually applied on this base. Injections
+1-3 are semantic ports (calc_delta_fair/update_deadline adjacency,
+curr->slice for ideal_runtime); injections 4-5 are byte-identical to
+the proven action (their anchors match). Generated against the
+post-BORE fair.c of this series; depends_on bore + governor-vorpal;
+best_effort: true (D16 - anchor drift = warn + skip).
+
+Author: MomenToMoiX project (koneko_dev); EEVDF port: this repo.
+
+Plan: integration_plan_feature_patches_v3.0.0.md section 4 (F6).
+---
+ kernel/sched/fair.c | 33 +++++++++++++++++++++++++++++++++
+ 1 file changed, 33 insertions(+)
+
+diff --git a/kernel/sched/fair.c b/kernel/sched/fair.c
+index 4e5ff5d..01cace1 100644
+--- a/kernel/sched/fair.c
++++ b/kernel/sched/fair.c
+@@ -61,6 +61,10 @@
+ 
+ EXPORT_TRACEPOINT_SYMBOL_GPL(sched_stat_runtime);
+ 
++extern int sched_gaming_active;
++
++#define GAMING_VRUNTIME_STRETCH		4
++
+ #include <linux/sched/bore.h>
+ /* bore: task_of fwd - defined below, in scope too late */
+ static inline struct task_struct *task_of(struct sched_entity *se);
+@@ -1224,7 +1228,24 @@ static void update_curr(struct cfs_rq *cfs_rq)
+ 	update_burst_penalty(curr);
+ #endif // CONFIG_SCHED_BORE
+ 	curr->vruntime += calc_delta_fair(delta_exec, curr);
++
++	if (unlikely(sched_gaming_active && !entity_is_task(curr))) {
++		curr->vruntime += calc_delta_fair(delta_exec * (GAMING_VRUNTIME_STRETCH - 1), curr);
++	} else if (unlikely(sched_gaming_active && entity_is_task(curr) &&
++			     curr->avg.load_avg < 100)) {
++		curr->vruntime += calc_delta_fair(delta_exec, curr);
++	}
+ 	update_deadline(cfs_rq, curr);
++
++	/* gaming: normal-priority tasks yield at half-slice */
++	if (unlikely(sched_gaming_active) && entity_is_task(curr)) {
++		struct task_struct *p = task_of(curr);
++
++		if (p->static_prio > DEFAULT_PRIO &&
++		    delta_exec > curr->slice / 2)
++			resched_curr(rq_of(cfs_rq));
++	}
++
+ 	update_min_vruntime(cfs_rq);
+ 
+ 	if (entity_is_task(curr)) {
+@@ -6855,6 +6876,10 @@ enqueue_task_fair(struct rq *rq, struct task_struct *p, int flags)
+ 	for_each_sched_entity(se) {
+ 		cfs_rq = cfs_rq_of(se);
+ 
++		if (unlikely(sched_gaming_active && entity_is_task(se) &&
++			     task_of(se)->static_prio <= DEFAULT_PRIO))
++			se->vruntime -= min_t(u64, se->vruntime, NSEC_PER_MSEC);
++
+ 		update_load_avg(cfs_rq, se, UPDATE_TG);
+ 		se_update_runnable(se);
+ 		update_cfs_group(se);
+@@ -8996,6 +9021,14 @@ static int task_hot(struct task_struct *p, struct lb_env *env)
+ 
+ 	delta = rq_clock_task(env->src_rq) - p->se.exec_start;
+ 
++	/* Gaming task isolation */
++	if (sched_gaming_active) {
++		if (capacity_orig_of(env->dst_cpu) < capacity_orig_of(env->src_cpu) &&
++		    task_util(p) > (capacity_orig_of(env->src_cpu) >> 3))
++			return 1;
++		return delta < (s64)sysctl_sched_migration_cost * 2;
++	}
++
+ 	return delta < (s64)sysctl_sched_migration_cost;
+ }
+ 
+-- 
+2.47.3
+
