@@ -15,6 +15,11 @@ description: >-
   forensics (git apply --check -v, failing file list, patch sha256) in the
   patch-apply-logs artifact before surfacing the strict failure.
 
+  D17 fix (incident run 114640000078): config_fragment is emitted one
+  symbol per line (multiline GITHUB_OUTPUT heredoc) — the old space-join
+  collapsed all symbols into a single line and the consumer's
+  line-oriented loop silently dropped all but the first.
+
 inputs:
   manifest_ref:
     description: 'Content branch or pinned SHA. Float `feature/patches` for nightly; pin a SHA for release-grade runs.'
@@ -252,10 +257,26 @@ runs:
         for eid, v in rows:
             out(f"  {eid}: {v}")
 
+        # D17 (incident run 114640000078): the fragment MUST be one symbol per
+        # line. The old space-join collapsed all 44 symbols into a single
+        # line, so the consumer's line-oriented loop processed exactly one
+        # "line" and silently dropped the rest — the governors never got
+        # enabled while the build stayed green. Multiline GITHUB_OUTPUT uses
+        # the documented heredoc form; consumers that iterate line-by-line
+        # AND consumers that word-split an unquoted expansion both then see
+        # every symbol. Defensive consumer hardening (belt & braces, in the
+        # set-kernel-config step of the build action):
+        #   CONFIG_LIST="${CONFIG_LIST// /$'\n'}"
+        out(f"config fragment: {len(frag)} symbol(s)")
+        for c in frag:
+            out(f"  fragment: {c}")
         gout = os.environ.get("GITHUB_OUTPUT")
         if gout:
             with open(gout, "a") as fh:
-                fh.write(f"config_fragment={' '.join(frag)}\n")
+                fh.write("config_fragment<<FRAG_EOF\n")
+                for c in frag:
+                    fh.write(c + "\n")
+                fh.write("FRAG_EOF\n")
                 fh.write(f"applied={','.join(applied)}\n")
         if failures:
             sys.exit(f"FATAL: strict apply failure(s): {', '.join(failures)} — see patch-apply-logs artifact + summary")
