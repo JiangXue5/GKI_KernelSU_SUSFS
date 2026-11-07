@@ -36,7 +36,7 @@ series:
 patches:
   # --- F1: BORE scheduler ---------------------------------------------------
   - id: bore-scheduler                   # 6.6 default variant (5.9.6 generation)
-    enabled: true
+    enabled: false
     kind: patch
     patch: patches/bore/0001-linux6.6.67-gki-bore-5.9.6.patch
     kernels: ["6.6"]
