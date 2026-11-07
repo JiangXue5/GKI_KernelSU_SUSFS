@@ -23,7 +23,8 @@
 #   A/B bore 6.6   : flip `enabled` between the 5.9.6 entry and the 5.1.0
 #                    entry here (no dispatch knob — §3.5)
 #
-# Plan: integration_plan_feature_patches_v3.0.0.md
+# Plan: integration_plan_feature_patches_v3.0.0.md; deltas tracked in
+# integration_plan v3.0.2 (KABI/CRC shield + D17 fragment fix, 2026-11-07)
 # Commit identity: Irina Shinakawa <25380803+chandr1000@users.noreply.github.com>
 
 series:
@@ -69,6 +70,22 @@ patches:
       sched.h with no direct cputime.h include — it compiled only via
       transitive-include luck on every leg so far. cputime.h hoisted
       above sched.h (fair.c order), matching the governor TUs.
+      RUNTIME INCIDENT CLOSED (kunzite boot panic, dmesg-ramoops-0
+      captured 2026-11-07): the raw on_rq/rel_deadline hunk in
+      sched_entity (unsigned int -> 2×unsigned char, layout-neutral via
+      padding) is genksyms-VISIBLE, and its CRC delta propagated
+      transitively to 5,965 symbols incl. the module_layout canary
+      (0x4e276f37 -> 0xb60e8dc8). The device enforces MODVERSIONS, so
+      every OEM vendor module was rejected at first-stage init
+      ("disagrees about version of symbol module_layout", UFS PHY
+      included) -> init timed out waiting for partitions and exited ->
+      "Attempted to kill init" panic ~10.3s, no boot animation. FIX:
+      __GENKSYMS__ shield on that hunk (genksyms sees the stock
+      `unsigned int on_rq;`; runtime code byte-identical). The two
+      _ANDROID_KABI_REPLACE slot hunks need no shield: ACK
+      android_kabi.h maps them to the stock reserves under
+      __GENKSYMS__ already. ABI gate expectation after fix: 0
+      CRC-DELTA (was 5,965).
 
   - id: bore-scheduler-66-510            # 6.6 ALTERNATIVE variant (5.1.0 generation)
     enabled: false                       # A/B: enable this, disable bore-scheduler
@@ -86,6 +103,11 @@ patches:
       proven fixups (sched_entity 4-slot relocation + GKI sysctl repairs —
       scripts/bore_66_510_apply.sh). Mutually exclusive with bore-scheduler;
       the fair.c gaming-bias anchors are cut against the 5.9.6 tree.
+      A/B WARNING (2026-11-07): before flipping this on, audit its
+      sched.h hunks for raw (non-KABI-macro) struct edits the same way
+      the 5.9.6 entry's on_rq hunk needed a __GENKSYMS__ shield — any
+      genksyms-visible field change drifts module_layout and bricks
+      MODVERSIONS devices at first-stage init (see bore-scheduler notes).
 
   - id: bore-scheduler-legacy-510-515    # 5.10 + 5.15 probe families
     enabled: true
