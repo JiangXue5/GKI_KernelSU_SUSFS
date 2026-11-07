@@ -8,6 +8,13 @@ description: >-
   runs kind: script entries, then emits the CONFIG_* fragment for the
   existing set-kernel-config step (D17).
 
+  D15 amendment (incident run 42248382967): git apply has no offset search
+  and rejects insertions that are not context-wrapped on both sides, so a
+  tree drifted from the series base (Wild machinery / google-backport)
+  fails the strict preflight. On failure this action now records PER-FILE
+  forensics (git apply --check -v, failing file list, patch sha256) in the
+  patch-apply-logs artifact before surfacing the strict failure.
+
 inputs:
   manifest_ref:
     description: 'Content branch or pinned SHA. Float `feature/patches` for nightly; pin a SHA for release-grade runs.'
@@ -68,7 +75,7 @@ runs:
         python3 -c 'import yaml' 2>/dev/null || pip install -q pyyaml
         export CONTENT LOGDIR
         python3 <<'PYEOF'
-        import os, subprocess, sys, glob, yaml
+        import os, re, subprocess, sys, glob, hashlib, yaml
 
         CONTENT = os.environ["CONTENT"]
         LOGDIR  = os.environ["LOGDIR"]
@@ -82,6 +89,17 @@ runs:
             if check and r.returncode != 0:
                 raise RuntimeError(f"git {' '.join(args)}: {r.stderr.strip()[:400]}")
             return r
+
+        def patch_forensics(patch_path, target):
+            """D15 amendment: capture which file/hunk refused the strict
+            preflight (git apply matches only at the stated line and needs
+            both-side context around insertions - see the series base notes
+            in PATCHES.yml). Returns (verbose output, failing files)."""
+            v = subprocess.run(["git", "apply", "--check", "-v", patch_path],
+                               cwd=target, capture_output=True, text=True)
+            txt = (v.stdout or "") + (v.stderr or "")
+            bad = sorted(set(re.findall(r"^error: (?:patch failed: )?(\S+?):", txt, re.M)))
+            return txt, bad
 
         def out(s): print(s, flush=True)
         def warn(s): print(f"::warning::{s}", flush=True)
@@ -193,7 +211,19 @@ runs:
             except (RuntimeError, subprocess.CalledProcessError) as ex:
                 msg = str(ex)
                 log = os.path.join(LOGDIR, f"{eid}.log")
-                open(log, "w").write(msg + "\n")
+                logtxt = msg + "\n"
+                bad = []
+                if kind == "patch" and e.get("patch"):
+                    try:
+                        ppath = os.path.join(CONTENT, e["patch"])
+                        ftxt, bad = patch_forensics(ppath, TARGET)
+                        digest = hashlib.sha256(open(ppath, "rb").read()).hexdigest()[:16]
+                        logtxt += (f"patch: {e['patch']} sha256:{digest}\n"
+                                   f"failing file(s): {', '.join(bad) or '(none parsed - see -v output)'}\n"
+                                   "--- git apply --check -v ---\n" + ftxt)
+                    except Exception as _fx:
+                        logtxt += f"(forensics unavailable: {_fx})\n"
+                open(log, "w").write(logtxt)
                 # sweep any .rej produced into the artifact dir
                 for rej in glob.glob(os.path.join(TARGET, "**", "*.rej"), recursive=True):
                     dst = os.path.join(LOGDIR, os.path.basename(rej))
@@ -201,10 +231,10 @@ runs:
                         subprocess.run(["cp", rej, dst])
                 be = e.get("best_effort", False)
                 if be and STRICT:
-                    verdict[eid] = f"FAILED (best_effort: warn + skip): {msg[:120]}"
+                    verdict[eid] = f"FAILED (best_effort: warn + skip){' [' + bad[0] + ']' if bad else ''}: {msg[:120]}"
                     warn(f"{eid}: {msg}")
                 else:
-                    verdict[eid] = f"FAILED (strict): {msg[:120]}"
+                    verdict[eid] = f"FAILED (strict){' [' + bad[0] + ']' if bad else ''}: {msg[:120]}"
                     failures.append(eid)
             rows.append((eid, verdict[eid]))
 
