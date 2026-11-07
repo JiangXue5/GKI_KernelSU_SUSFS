@@ -276,14 +276,14 @@ patches:
     best_effort: false
     config: [CONFIG_ZRAM=m, CONFIG_ZRAM_DEF_COMP_ZSTD=y, CONFIG_ZSMALLOC=m, CONFIG_ZSMALLOC_STAT=y,
              CONFIG_LRU_GEN=y, CONFIG_LRU_GEN_ENABLED=y, CONFIG_LRU_GEN_STATS=n, CONFIG_COMPACTION=y,
-             CONFIG_MIGRATION=y, CONFIG_KSM=y, CONFIG_TRANSPARENT_HUGEPAGE=y, CONFIG_IOSCHED_BFQ=y,
+             CONFIG_MIGRATION=y, CONFIG_TRANSPARENT_HUGEPAGE=y, CONFIG_IOSCHED_BFQ=y,
              CONFIG_BFQ_GROUP_IOSCHED=y, CONFIG_MQ_IOSCHED_DEADLINE=y, CONFIG_PREEMPT=y, CONFIG_PSI=y,
              CONFIG_PREEMPT_NONE=n, CONFIG_PREEMPT_VOLUNTARY=n, CONFIG_HIGH_RES_TIMERS=y,
              CONFIG_TCP_FASTOPEN=y, CONFIG_CPU_IDLE=y, CONFIG_CPU_IDLE_GOV_MENU=y,
              CONFIG_CPU_IDLE_GOV_TEO=y, CONFIG_WQ_POWER_EFFICIENT_DEFAULT=y, CONFIG_PM_WAKELOCKS=y,
              CONFIG_PM_WAKELOCKS_LIMIT=100, CONFIG_PM_WAKELOCKS_GC=y, CONFIG_SUSPEND=y,
              CONFIG_DEVFREQ_GOV_PERFORMANCE=y, CONFIG_DEVFREQ_GOV_PASSIVE=y, CONFIG_UCLAMP_TASK=y,
-             CONFIG_UCLAMP_TASK_GROUP=y, CONFIG_CMA=y, CONFIG_DMA_CMA=y, CONFIG_MQ_IOSCHED_KYBER=y,
+             CONFIG_UCLAMP_TASK_GROUP=y, CONFIG_CMA=y, CONFIG_MQ_IOSCHED_KYBER=y,
              CONFIG_SUSPEND_FREEZER=y, CONFIG_CPU_FREQ_GOV_SCHEDUTIL=y, CONFIG_ENERGY_MODEL=y,
              CONFIG_SCHED_MC=y, CONFIG_NO_HZ_IDLE=y, CONFIG_NO_HZ_FULL=n]
     title: MomenToMoiX (Tenebrion) screen/charging/thermal QoS driver
@@ -297,6 +297,33 @@ patches:
       obj-$(CONFIG_KSU) += kernelsu/ to the EOF region first, and git apply
       refuses EOF-anchored hunks on a file that grew past them (THE run
       42248382967 root cause, reproduced locally).
+      KABI TRIAGE (runs 114640000078 / 114742731460 / 114758566379 /
+      114779732907, closed 2026-11-07): DMA_CMA and KSM removed from this
+      block — they are the only two entries whose stock resolution is =n
+      AND whose flip is genksyms-visible. CONFIG_DMA_CMA=y adds
+      `struct cma *cma_area` to struct device (kernel/dma/Kconfig has no
+      default; stock gki_defconfig never sets it) and struct device is
+      transitively reachable from ~65% of the ABI table (net_device,
+      sk_buff, task_struct via signal_struct->tty_struct, gendisk,
+      usb/hci/pci/virtio...), so the flip drifted 5,962/9,082 symbols
+      including module_layout itself (0x4e276f37 -> 0x676ffd21) — with
+      MODVERSIONS enforced by the device that rejects every stock vendor
+      module at first-stage init (the kunzite boot-panic mechanism, this
+      time config-induced). CONFIG_KSM=y adds ksm_merging_pages +
+      ksm_zero_pages to struct mm_struct (mm/Kconfig: no default) and
+      drifts the mm*-taking exports (get_user_pages, mmput...) that GPU
+      vendor modules bind against. BORE is innocent here: with the
+      __GENKSYMS__ shield active its marginal ABI cost is exactly the 3
+      data symbols (sched_feat_keys/names, sysctl_sched_base_slice) and
+      0 with it disabled — the 5,965->5,962 move between runs
+      114758566379 and 114779732907 is precisely that removal. All other
+      block entries verified either stock no-ops (SUSPEND, COMPACTION,
+      MIGRATION, THP, NO_HZ_IDLE, KYBER, MQ_IOSCHED_DEADLINE,
+      SUSPEND_FREEZER, PREEMPT* on a PREEMPT=y stock, PSI, UCLAMP*, CMA,
+      ENERGY_MODEL, LRU_GEN*) or genksyms-type-silent (BFQ, ZSMALLOC_STAT
+      internal-only, WQ_POWER_EFFICIENT_DEFAULT, PM_WAKELOCKS_LIMIT/GC,
+      ZRAM_DEF_COMP_ZSTD, SCHEDUTIL/SCHED_MC/TCP_FASTOPEN inline-only
+      gates). Gate expectation after this fix: 0 CRC-DELTA.
 
   - id: momentomoix-selinux
     enabled: true
