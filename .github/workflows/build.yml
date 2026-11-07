@@ -1188,11 +1188,36 @@ jobs:
           echo "::error::feature-patches applier failed (strict mode) - see patch-apply-logs artifact + step summary"
           exit 1
 
-      - name: Enable selected feature configs
+      - name: Normalize feature config fragment (D17, scoped)
         if: steps['feature-patches'].outputs.config_fragment != ''
+        id: normalize-fragment
+        shell: bash
+        env:
+          FRAG: ${{ steps['feature-patches'].outputs.config_fragment }}
+        run: |
+          set -euo pipefail
+          # D17 (incident run 114640000078): the applier's fragment may arrive
+          # space-joined on one line. The first fix normalized GLOBALLY inside
+          # set-kernel-config, which shredded other callers' "# comment" lines
+          # (btf action, Issues #176/#211): the split orphaned the "#" and the
+          # no-"=" fallback appended every word as <word>=y. So the recovery
+          # lives HERE, scoped to the feature/patches fragment only: split
+          # spaces, keep strict CONFIG_X=<v> lines, drop everything else
+          # loudly instead of letting it near gki_defconfig.
+          TOTAL=$(printf '%s\n' "$FRAG" | tr ' ' '\n' | grep -c . || true)
+          KEPT=$(printf '%s\n' "$FRAG" | tr ' ' '\n' | grep -cE '^CONFIG_[A-Za-z0-9_]+=' || true)
+          echo "fragment: $KEPT CONFIG line(s) kept, $((TOTAL - KEPT)) non-CONFIG line(s) dropped"
+          {
+            echo "config_list<<FRAG_EOF"
+            printf '%s\n' "$FRAG" | tr ' ' '\n' | grep -E '^CONFIG_[A-Za-z0-9_]+=' || true
+            echo "FRAG_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Enable selected feature configs
+        if: steps['normalize-fragment'].outputs.config_list != ''
         uses: ./.github/actions/set-kernel-config
         with:
-          config_list: ${{ steps['feature-patches'].outputs.config_fragment }}
+          config_list: ${{ steps['normalize-fragment'].outputs.config_list }}
 
       - name: Build Normal Kernel
         env:
