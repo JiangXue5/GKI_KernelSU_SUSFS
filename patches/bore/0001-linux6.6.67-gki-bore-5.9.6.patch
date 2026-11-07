@@ -32,12 +32,10 @@ Plan: integration_plan_feature_patches_v3.0.0.md section 4 (F1).
  kernel/sched/fair.c        |  87 +++++++-
  kernel/sched/features.h    |   4 +
  kernel/sched/sched.h       |   9 +
- localversion               |   1 +
  scripts/setlocalversion    |   2 +-
  14 files changed, 737 insertions(+), 6 deletions(-)
  create mode 100644 include/linux/sched/bore.h
  create mode 100644 kernel/sched/bore.c
- create mode 100644 localversion
 
 diff --git a/include/linux/sched.h b/include/linux/sched.h
 index 8a06cb7..028053d 100644
@@ -1135,13 +1133,6 @@ index 581fc21..94985cc 100644
  
  #ifdef CONFIG_SCHED_DEBUG
  extern int sysctl_resched_latency_warn_ms;
-diff --git a/localversion b/localversion
-new file mode 100644
-index 0000000..17bfa4b
---- /dev/null
-+++ b/localversion
-@@ -0,0 +1 @@
-+-bore
 diff --git a/scripts/setlocalversion b/scripts/setlocalversion
 index 5818465..584b0d1 100755
 --- a/scripts/setlocalversion
