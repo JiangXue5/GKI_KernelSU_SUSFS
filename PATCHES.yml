@@ -5,7 +5,11 @@
 # documentation (plan v3.0.0 §3.2, decisions D15–D19).
 #
 #   series.apply   : git-apply (D15) — strict `git apply --check` then apply,
-#                    .rej/.log collected as artifacts on failure
+#                    .rej/.log collected as artifacts on failure. git apply
+#                    matches hunks ONLY at their stated line (no offset
+#                    search) and rejects insertions without context on BOTH
+#                    sides (EOF appends included) - every hunk below is
+#                    anchored accordingly (incident run 42248382967).
 #   series.order   : list order below == apply order (depends_on validated at
 #                    parse time; a disabled/failed dep auto-skips dependents
 #                    LOUDLY in the step summary)
@@ -145,7 +149,9 @@ patches:
       No CONFIG_CPU_FREQ_DEFAULT_GOV_REFLEX on purpose: proven not to work
       upstream and reverted there. The embedded copy is the earlier
       hispeed-blend generation, not firelzrd v0.4.0. cputime.h include-order
-      fix (aacfc1b9 + 4d26dddb) folded.
+      fix (aacfc1b9 + 4d26dddb) folded. Makefile insert re-anchored between
+      build_policy/build_utility (was: EOF app after bore.o - a bore failure
+      used to cascade here; run 42248382967).
 
   # --- F3: Vorpal governor + compat shim -------------------------------------
   - id: governor-vorpal
@@ -164,7 +170,10 @@ patches:
       rfx_gki510_compat.c (obj-y, always built) is the SOLE definer of
       sched_gaming_active in this tree — Bara-no-Seidou and the fair.c
       gaming bias consume it. Disabling vorpal auto-skips both (loud, in
-      the summary). Input-handler init-bug fix folded.
+      the summary). Input-handler init-bug fix folded. Makefile insert
+      re-anchored between fair.o/build_policy and Kconfig block moved
+      inside the menu (endif|endmenu) - both were EOF-coupled to reflex's
+      apply state (run 42248382967 cascade).
 
   # --- F4: Bara-no-Seidou governor -------------------------------------------
   - id: governor-bara-no-seidou
@@ -181,7 +190,9 @@ patches:
     notes: >
       Consumes sched_gaming_active from the vorpal shim. local_clock
       include fix (1e4570af) folded — this is the file whose stale copy
-      caused incident round 3.
+      caused incident round 3. Makefile insert re-anchored between
+      core.o/fair.o; the Kconfig block stays after vorpal's (the manifest
+      depends_on is intentional - the shim symbol).
 
   # --- F6: fair.c gaming bias -------------------------------------------------
   - id: fair-gaming-bias
@@ -231,7 +242,11 @@ patches:
     notes: >
       The MGLRU/KSM/zram-zstd/zsmalloc-stats/BFQ/PSI/uclamp config block
       moved from the old action's set-kernel-config step into this
-      manifest config: field (D17).
+      manifest config: field (D17). drivers/Makefile insert moved off the
+      EOF anchor (after DRM_ACCEL/accel/) - root-setup appends
+      obj-$(CONFIG_KSU) += kernelsu/ to the EOF region first, and git apply
+      refuses EOF-anchored hunks on a file that grew past them (THE run
+      42248382967 root cause, reproduced locally).
 
   - id: momentomoix-selinux
     enabled: true

@@ -37,14 +37,13 @@ index a1b8216..a19e0e0 100644
 +	  'reflex' is an advanced CPU frequency governor based on schedutil,
 +	  featuring idle-time accounting and PELT-complementary exponential decay.
 diff --git a/kernel/sched/Makefile b/kernel/sched/Makefile
-index c375b3f..3f54f1c 100644
+index ff1738c..9eb16ae 100644
 --- a/kernel/sched/Makefile
 +++ b/kernel/sched/Makefile
-@@ -34,3 +34,4 @@ obj-y += build_policy.o
- obj-y += build_utility.o
- obj-y += bore.o
- obj-$(CONFIG_ANDROID_VENDOR_HOOKS) += vendor_hooks.o
+@@ -33,2 +33,3 @@ obj-y += fair.o
+ obj-y += build_policy.o
 +obj-$(CONFIG_CPU_FREQ_GOV_REFLEX) += cpufreq_reflex.o
+ obj-y += build_utility.o
 diff --git a/kernel/sched/cpufreq_reflex.c b/kernel/sched/cpufreq_reflex.c
 new file mode 100644
 index 0000000..16f8161

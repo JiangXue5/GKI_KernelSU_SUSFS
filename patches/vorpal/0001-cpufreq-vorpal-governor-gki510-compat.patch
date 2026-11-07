@@ -22,13 +22,12 @@ Plan: integration_plan_feature_patches_v3.0.0.md section 4 (F3).
  create mode 100644 kernel/sched/rfx_gki510_compat.c
 
 diff --git a/drivers/cpufreq/Kconfig b/drivers/cpufreq/Kconfig
-index a19e0e0..d7360db 100644
+index a1b8216..a02bc78 100644
 --- a/drivers/cpufreq/Kconfig
 +++ b/drivers/cpufreq/Kconfig
-@@ -367,3 +367,11 @@ config CPU_FREQ_GOV_REFLEX
- 	help
- 	  'reflex' is an advanced CPU frequency governor based on schedutil,
- 	  featuring idle-time accounting and PELT-complementary exponential decay.
+@@ -359,3 +359,11 @@ config QORIQ_CPUFREQ
+ 
+ endif
 +
 +config CPU_FREQ_GOV_VORPAL
 +	tristate "'vorpal' cpufreq governor"
@@ -37,16 +36,16 @@ index a19e0e0..d7360db 100644
 +	help
 +	  'vorpal' is a schedutil-based governor tuned for
 +	  gaming/thermal-aware dual-profile operation.
+ endmenu
 diff --git a/kernel/sched/Makefile b/kernel/sched/Makefile
-index 3f54f1c..9daac37 100644
+index ff1738c..200e6a8 100644
 --- a/kernel/sched/Makefile
 +++ b/kernel/sched/Makefile
-@@ -35,3 +35,5 @@ obj-y += build_utility.o
- obj-y += bore.o
- obj-$(CONFIG_ANDROID_VENDOR_HOOKS) += vendor_hooks.o
- obj-$(CONFIG_CPU_FREQ_GOV_REFLEX) += cpufreq_reflex.o
+@@ -32,2 +32,4 @@ obj-y += core.o
+ obj-y += fair.o
 +obj-$(CONFIG_CPU_FREQ_GOV_VORPAL) += cpufreq_vorpal.o
 +obj-y += rfx_gki510_compat.o
+ obj-y += build_policy.o
 diff --git a/kernel/sched/cpufreq_vorpal.c b/kernel/sched/cpufreq_vorpal.c
 new file mode 100644
 index 0000000..e4b33c1

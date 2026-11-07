@@ -23,14 +23,17 @@ Plan: integration_plan_feature_patches_v3.0.0.md section 4 (F5).
  create mode 100644 drivers/momx/MomenToMoiX.c
 
 diff --git a/drivers/Makefile b/drivers/Makefile
-index 1bec781..4ecbb2b 100644
+index 1bec781..d482026 100644
 --- a/drivers/Makefile
 +++ b/drivers/Makefile
-@@ -199,3 +199,4 @@ obj-$(CONFIG_DRM_ACCEL)		+= accel/
+@@ -196,6 +196,7 @@ obj-$(CONFIG_MOST)		+= most/
+ obj-$(CONFIG_PECI)		+= peci/
+ obj-$(CONFIG_HTE)		+= hte/
+ obj-$(CONFIG_DRM_ACCEL)		+= accel/
++obj-y += momx/
  obj-$(CONFIG_CDX_BUS)		+= cdx/
  
  obj-$(CONFIG_S390)		+= s390/
-+obj-y += momx/
 diff --git a/drivers/momx/Makefile b/drivers/momx/Makefile
 new file mode 100644
 index 0000000..d90b4e5

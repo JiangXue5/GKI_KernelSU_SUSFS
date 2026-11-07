@@ -22,11 +22,10 @@ Plan: integration_plan_feature_patches_v3.0.0.md section 4 (F4).
  create mode 100644 kernel/sched/cpufreq_bara_no_seidou.c
 
 diff --git a/drivers/cpufreq/Kconfig b/drivers/cpufreq/Kconfig
-index d7360db..f4e92c7 100644
+index de9cd90..7d0cf85 100644
 --- a/drivers/cpufreq/Kconfig
 +++ b/drivers/cpufreq/Kconfig
-@@ -375,3 +375,12 @@ config CPU_FREQ_GOV_VORPAL
- 	help
+@@ -367,4 +367,13 @@ config CPU_FREQ_GOV_VORPAL
  	  'vorpal' is a schedutil-based governor tuned for
  	  gaming/thermal-aware dual-profile operation.
 +
@@ -37,16 +36,17 @@ index d7360db..f4e92c7 100644
 +	help
 +	  'bara-no-seidou' is a schedutil-based governor tuned for
 +	  battery efficiency with an automatic gaming-mode switch,
-+	  touch-boost smoothing, and PSI-aware tuning.
++	  preserving stock behaviour outside of gameplay.
+ endmenu
+ 
 diff --git a/kernel/sched/Makefile b/kernel/sched/Makefile
-index 9daac37..d8e2a4b 100644
+index ff1738c..a687685 100644
 --- a/kernel/sched/Makefile
 +++ b/kernel/sched/Makefile
-@@ -37,3 +37,4 @@ obj-$(CONFIG_ANDROID_VENDOR_HOOKS) += vendor_hooks.o
- obj-$(CONFIG_CPU_FREQ_GOV_REFLEX) += cpufreq_reflex.o
- obj-$(CONFIG_CPU_FREQ_GOV_VORPAL) += cpufreq_vorpal.o
- obj-y += rfx_gki510_compat.o
+@@ -31,2 +31,3 @@ endif
+ obj-y += core.o
 +obj-$(CONFIG_CPU_FREQ_GOV_BARA_NO_SEIDOU) += cpufreq_bara_no_seidou.o
+ obj-y += fair.o
 diff --git a/kernel/sched/cpufreq_bara_no_seidou.c b/kernel/sched/cpufreq_bara_no_seidou.c
 new file mode 100644
 index 0000000..f70a91b
