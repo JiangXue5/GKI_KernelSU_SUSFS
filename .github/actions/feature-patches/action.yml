@@ -62,6 +62,9 @@ runs:
         git -C "$CONTENT" fetch -q --depth=1 origin "$MANIFEST_REF"
         git -C "$CONTENT" checkout -q --detach FETCH_HEAD
         echo "content: $MANIFEST_REF @ $(git -C "$CONTENT" rev-parse --short=12 HEAD)"
+        # C1 (plan §4): snapshot the exact content commit this build used into
+        # the job env — the verdict sidecar cites it as provenance.
+        echo "MANIFEST_SHA=$(git -C "$CONTENT" rev-parse --short=12 HEAD)" >> "$GITHUB_ENV"
         # artifacts land in the workspace so the workflow's always() upload
         # step can ship them even when this action fails strict
         mkdir -p "${{ github.workspace }}/patch-apply-logs"
@@ -73,14 +76,15 @@ runs:
         FEATURES: ${{ inputs.features }}
         STRICT: ${{ inputs.strict }}
         TARGET_DIR: ${{ inputs.target_dir }}
+        MANIFEST_REF: ${{ inputs.manifest_ref }}
       run: |
         set -euo pipefail
         CONTENT="$RUNNER_TEMP/feature-patches"
         LOGDIR="${{ github.workspace }}/patch-apply-logs"
         python3 -c 'import yaml' 2>/dev/null || pip install -q pyyaml
-        export CONTENT LOGDIR
+        export CONTENT LOGDIR MANIFEST_REF
         python3 <<'PYEOF'
-        import os, re, subprocess, sys, glob, hashlib, yaml
+        import os, re, subprocess, sys, glob, hashlib, json, datetime, shutil, yaml
 
         CONTENT = os.environ["CONTENT"]
         LOGDIR  = os.environ["LOGDIR"]
@@ -88,6 +92,42 @@ runs:
         TARGET  = os.environ["TARGET_DIR"]
         FEATURES = os.environ.get("FEATURES", "default").strip() or "default"
         STRICT  = os.environ.get("STRICT", "true") == "true"
+        MANIFEST_REF = os.environ.get("MANIFEST_REF", "")
+        MANIFEST_SHA = os.environ.get("MANIFEST_SHA", "")
+
+        # C1 (plan §4, D1): producer-emits-sidecar. Every terminal path of the
+        # applier snapshots a machine-readable verdict document to
+        # /tmp/feature-patches-verdict.json; the build-summary renderer (C3)
+        # and the build-metadata features block (C4) read it from /tmp, and a
+        # copy lands in LOGDIR so the always-on patch-apply-logs upload ships
+        # it for failed runs too (D15 forensics pattern).
+        VERDICT_SIDECAR = "/tmp/feature-patches-verdict.json"
+
+        kver = None   # set once the tree's Makefile is parsed (D18)
+
+        def write_sidecar(doc):
+            with open(VERDICT_SIDECAR, "w") as fh:
+                json.dump(doc, fh, indent=2)
+            shutil.copy(VERDICT_SIDECAR,
+                        os.path.join(LOGDIR, "feature-patches-verdict.json"))
+
+        def fatal(msg):
+            """Early-FATAL escape (missing manifest, duplicate ids, unknown
+            dep/id): emit the minimal sidecar first so the renderer can say
+            'applier failed before verdicts' instead of silently omitting the
+            section (plan C1.2), then fail loud."""
+            write_sidecar({
+                "schema": "feature-patches-verdict/v1",
+                "generated_utc": datetime.datetime.now(
+                    datetime.timezone.utc).isoformat(timespec="seconds"),
+                "state": "applier-failed",
+                "reason": str(msg)[:400],
+                "manifest_ref_input": MANIFEST_REF,
+                "manifest_resolved_short_sha": MANIFEST_SHA,
+                "mode": FEATURES, "strict": STRICT,
+                **({"kernel_version_gate": kver} if kver else {}),
+            })
+            sys.exit(str(msg))
 
         def git(args, cwd, check=True):
             r = subprocess.run(["git"] + args, cwd=cwd, capture_output=True, text=True)
@@ -111,11 +151,11 @@ runs:
 
         mfile = os.path.join(CONTENT, "PATCHES.yml")
         if not os.path.exists(mfile):
-            sys.exit("FATAL: PATCHES.yml not found on the content ref (fail-loud, RC3)")
+            fatal("FATAL: PATCHES.yml not found on the content ref (fail-loud, RC3)")
         manifest = yaml.safe_load(open(mfile))
         entries = manifest.get("patches") or []
         if not entries:
-            sys.exit("FATAL: PATCHES.yml has no patches: entries")
+            fatal("FATAL: PATCHES.yml has no patches: entries")
 
         # D18: version gate from the tree being built
         mk = os.path.join(TARGET, "Makefile")
@@ -126,12 +166,12 @@ runs:
             return "?"
         kver = f"{ver('VERSION')}.{ver('PATCHLEVEL')}"
         if "?" in kver:
-            sys.exit(f"FATAL: cannot parse VERSION/PATCHLEVEL from {mk}")
+            fatal(f"FATAL: cannot parse VERSION/PATCHLEVEL from {mk}")
         out(f"kernel tree: {kver} @ {TARGET}")
 
         ids = [e["id"] for e in entries]
         if len(set(ids)) != len(ids):
-            sys.exit("FATAL: duplicate entry ids in PATCHES.yml")
+            fatal("FATAL: duplicate entry ids in PATCHES.yml")
 
         # parse-time validation (plan §3.2): manifest order == apply order, so
         # every depends_on id must PRECEDE its dependent in the list
@@ -139,9 +179,9 @@ runs:
         for e in entries:
             for d in e.get("depends_on") or []:
                 if d not in idx:
-                    sys.exit(f"FATAL: {e['id']} depends on unknown id {d}")
+                    fatal(f"FATAL: {e['id']} depends on unknown id {d}")
                 if idx[d] >= idx[e["id"]]:
-                    sys.exit(f"FATAL: {e['id']} depends on {d}, which does not precede it in list order")
+                    fatal(f"FATAL: {e['id']} depends on {d}, which does not precede it in list order")
 
         # resolve the active set
         if FEATURES == "off":
@@ -152,7 +192,7 @@ runs:
             want = {x.strip() for x in FEATURES.split(",") if x.strip()}
             unknown = want - set(ids)
             if unknown:
-                sys.exit(f"FATAL: unknown feature id(s): {sorted(unknown)}")
+                fatal(f"FATAL: unknown feature id(s): {sorted(unknown)}")
             active = [e["id"] for e in entries
                       if e.get("enabled", True) or e["id"] in want]
 
@@ -242,6 +282,54 @@ runs:
                     verdict[eid] = f"FAILED (strict){' [' + bad[0] + ']' if bad else ''}: {msg[:120]}"
                     failures.append(eid)
             rows.append((eid, verdict[eid]))
+
+        # C1 (plan §4): full verdict sidecar — written BEFORE the step summary
+        # and BEFORE the strict-failure exit below, so failed applies still
+        # ship data. Every manifest entry appears in manifest order with its
+        # runtime verdict; titles/config/kernels are snapshotted from the
+        # exact manifest commit this build used (no renderer re-parse, no
+        # drift when a floatable ref moves mid-run).
+        def vstate(v):
+            return ("applied" if v == "applied"
+                    else "failed" if v.startswith("FAILED")
+                    else "skipped")          # every other row is a skip variant
+
+        ebyid = {e["id"]: e for e in entries}
+        write_sidecar({
+            "schema": "feature-patches-verdict/v1",
+            "generated_utc": datetime.datetime.now(
+                datetime.timezone.utc).isoformat(timespec="seconds"),
+            "state": "resolved",
+            "manifest_ref_input": MANIFEST_REF,
+            "manifest_resolved_short_sha": MANIFEST_SHA,
+            "manifest_base": (manifest.get("series") or {}).get("base", ""),
+            "mode": FEATURES, "strict": STRICT,
+            "kernel_version_gate": kver,
+            "totals": {
+                "entries": len(rows),
+                "applied": sum(1 for _, v in rows if vstate(v) == "applied"),
+                "skipped": sum(1 for _, v in rows if vstate(v) == "skipped"),
+                "failed": sum(1 for _, v in rows
+                              if vstate(v) == "failed"
+                              and not v.startswith("FAILED (best_effort")),
+                "failed_best_effort": sum(1 for _, v in rows
+                                          if v.startswith("FAILED (best_effort")),
+                "config_symbols": len(frag),
+            },
+            "entries": [{
+                "id": eid,
+                "title": ebyid[eid].get("title") or "",
+                "kind": ebyid[eid].get("kind", "patch"),
+                # YAML floats would collapse 5.10 -> 5.1; format defensively
+                # exactly like the kernels gate does
+                "kernels": [(f"{k:g}" if isinstance(k, float) else str(k))
+                            for k in (ebyid[eid].get("kernels") or [])],
+                "enabled": ebyid[eid].get("enabled", True),
+                "verdict_state": vstate(verdict.get(eid, "")),
+                "verdict": verdict.get(eid, "not reached"),
+                "config": ebyid[eid].get("config") or [],
+            } for eid, _ in rows],
+        })
 
         # step summary (silence is a bug — RC3 lesson)
         lines = ["## Feature patches (manifest-driven)", "",
