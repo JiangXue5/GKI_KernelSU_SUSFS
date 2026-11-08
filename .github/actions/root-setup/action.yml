@@ -40,7 +40,7 @@ runs:
             manager="BakaSU Manager"
             ;;
           sukisu-ultra)
-            repo="https://github.com/SukiSU-Ultra/SukiSU-Ultra.git"
+            repo="https://github.com/chandr1000/SukiSU-Ultra.git"
             directory="SukiSU-Ultra"
             manager="SukiSU-Ultra Manager"
             ;;
@@ -197,7 +197,7 @@ runs:
         # same GitHub API endpoint upstream's Kbuild prefers, so a stale or
         # truncated clone is surfaced loudly instead of drifting silently.
         if [ "$flavor" = "sukisu-ultra" ]; then
-          github_count="$(curl -sI "https://api.github.com/repos/SukiSU-Ultra/SukiSU-Ultra/commits?sha=main&per_page=1" 2>/dev/null | grep -i '^link:' | sed -n 's/.*page=\([0-9]*\)>; rel="last".*/\1/p' || true)"
+          github_count="$(curl -sI "https://api.github.com/repos/chandr1000/SukiSU-Ultra/commits?sha=main&per_page=1" 2>/dev/null | grep -i '^link:' | sed -n 's/.*page=\([0-9]*\)>; rel="last".*/\1/p' || true)"
           if [ -n "$github_count" ] && [ "$github_count" != "$commits_count" ]; then
             delta=$((github_count - commits_count))
             [ "$delta" -lt 0 ] && delta=$((-delta))
