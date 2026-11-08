@@ -210,6 +210,20 @@ jobs:
           set -euo pipefail
           GBP_TREE="${{ github.workspace }}/kernel/common"
           GBP_VERSION="${{ inputs.version }}"
+          GBP_INPUT="${{ inputs.google_backport }}"          # raw toggle input (provenance)
+          # C2 (plan §4): "started" marker sidecar — if this step dies at any
+          # gate below (F11/F13/F2/F3/F4/F6b or the apply itself), the
+          # build-summary renderer (C3) reports "failed before apply" instead
+          # of silently showing "not requested". Every terminal state below
+          # overwrites this file.
+          export GBP_VERSION GBP_INPUT
+          python3 - <<'GBP_STATE_PY'
+          import json, os
+          json.dump({"schema": "google-backport-series/v1", "state": "started",
+                     "leg": os.environ["GBP_VERSION"],
+                     "input": os.environ["GBP_INPUT"]},
+                    open("/tmp/google-backport-series.json", "w"))
+          GBP_STATE_PY
           # family prefix <V><P> + dotted family, derived from the leg's kernel
           # version (android15-6.6 -> 66 / 6.6). Family-agnostic by design: a
           # new family needs threading + self-gate changes only (OQ-1).
@@ -241,6 +255,24 @@ jobs:
             else
               # F12: series not (yet) authored for this leg — skip, matrix continues
               echo "GBP_STATE=skipped-no-series-branch" >> "$GITHUB_ENV"
+              # C2 (plan §4/D4): terminal skip-state sidecar — the renderer
+              # reports the skip with candidates, never a patch list.
+              export GBP_WANT="$WANT" GBP_CANDIDATES
+              # NOTE: the heredoc body + terminator sit at the step's base
+              # indent on purpose — bash requires the closing delimiter at
+              # column 0 (post-YAML-strip), so it cannot nest inside this
+              # else-block like the python3 line does.
+              python3 - <<'GBP_SKIP_PY'
+          import json, os
+          json.dump({
+              "schema": "google-backport-series/v1",
+              "state": "skipped-no-series-branch",
+              "leg": os.environ["GBP_VERSION"],
+              "input": os.environ["GBP_INPUT"],
+              "wanted_branch": os.environ["GBP_WANT"],
+              "candidates": os.environ.get("GBP_CANDIDATES", "").split(),
+          }, open("/tmp/google-backport-series.json", "w"), indent=2)
+          GBP_SKIP_PY
               {
                 echo "### Google upstream backport series"
                 echo "- State: skipped — no series branch \`${WANT}\` for this leg (auto mode)"
@@ -360,6 +392,73 @@ jobs:
 
           # --- provenance (§2.5) ----------------------------------------------
           GBP_SERIES_SHA="$(sha256sum "$GBP_SERIES_CONF" | cut -c1-12)"
+
+          # --- C2 (plan §4, D2 taxonomy): dynamic batch/entry listing for the
+          #     build-summary renderer. Grouping rule: ONLY comments matching
+          #     "^Batch <id>" start a group; every other comment (CVE
+          #     annotations, the 0077-0081 removal note, header prose) is an
+          #     annotation — entries keep flowing into the current group.
+          #     Categories are attached at run time by classify() — the ONE
+          #     place the D2 taxonomy lives; unknown future batches (the 6.6
+          #     LTS catch-up era, D7) land in "other" with their raw label
+          #     preserved. Generated at run time, never maintained by hand.
+          export GBP_VERSION GBP_INPUT GBP_REF_MODE GBP_REF GBP_REF_HEAD \
+                 GBP_SERIES_SHA GBP_COUNT GBP_CANDIDATES
+          python3 - "$GBP_SERIES_CONF" > /tmp/gbp-batches.json <<'GBP_BATCH_PY'
+          import json, re, sys
+
+          def classify(label):   # D2 mapping — the ONE place the taxonomy lives
+              L = label.lower()
+              if re.match(r'^batch a\b', L) or 'security' in L or 'asb' in L or 'cve' in L:
+                  return "security"       # Security backports (ASB/CVE) — Batch A
+              if re.match(r'^batch b', L) or 'stability' in L or 'bugfix' in L or 'bug fix' in L:
+                  return "stability"      # Stability & bug fixes (B-1..B-3 combined, D2)
+              if 'maintenance' in L or 'cleanup' in L or 'tooling' in L or 'revert' in L:
+                  return "maintenance"    # Maintenance & cleanups
+              return "other"              # Other — <raw label> (D7 LTS catch-up safety)
+
+          batches = []
+          for line in open(sys.argv[1]):
+              s = line.strip()
+              if not s:
+                  continue
+              if s.startswith("#"):
+                  txt = s.lstrip("#").strip()
+                  if re.match(r'^Batch\s+\S', txt, re.I):
+                      batches.append({"label": txt, "entries": [],
+                                      "category": classify(txt)})
+                  continue
+              if not batches:
+                  batches.append({"label": "(pre-batch)", "entries": [],
+                                  "category": "other"})
+              batches[-1]["entries"].append(s)
+
+          json.dump(batches, sys.stdout)
+          GBP_BATCH_PY
+
+          python3 - <<'GBP_ASSEMBLE_PY'
+          import json, os
+          batches = json.load(open("/tmp/gbp-batches.json"))
+          counts = {}                       # D2: canonical category counts (computed)
+          for b in batches:
+              counts[b["category"]] = counts.get(b["category"], 0) + len(b["entries"])
+          doc = {
+            "schema": "google-backport-series/v1",
+            "state": "applied",
+            "leg": os.environ["GBP_VERSION"],
+            "input": os.environ["GBP_INPUT"],
+            "mode": os.environ["GBP_REF_MODE"],
+            "ref": os.environ["GBP_REF"],
+            "ref_head": os.environ["GBP_REF_HEAD"],
+            "series_conf_sha256_12": os.environ["GBP_SERIES_SHA"],
+            "candidates": os.environ.get("GBP_CANDIDATES", "").split(),
+            "patch_count": int(os.environ["GBP_COUNT"]),
+            "kernel_source_commit": os.environ.get("KERNEL_SOURCE_COMMIT", "unknown"),
+            "categories": counts,           # e.g. {"security": 4, "stability": 94}
+            "batches": batches,             # raw labels + category + ordered entries
+          }
+          json.dump(doc, open("/tmp/google-backport-series.json", "w"), indent=2)
+          GBP_ASSEMBLE_PY
           {
             echo "GBP_STATE=applied"
             echo "GBP_APPLIED=${GBP_COUNT}"
@@ -369,6 +468,7 @@ jobs:
             echo "GBP_REF_HEAD=${GBP_REF_HEAD}"
             echo "GBP_SERIES_ROOT=${GBP_SERIES_ROOT}"
             echo "GBP_CANDIDATES=${GBP_CANDIDATES}"
+            echo "GBP_SIDECAR=/tmp/google-backport-series.json"
           } >> "$GITHUB_ENV"
           {
             echo "### Google upstream backport series"
@@ -388,11 +488,29 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Record Google Backport Skip (family gate)
-        if: inputs.google_backport && inputs.version != 'android15-6.6'
+        # C2 (plan §4/D4): the != 'off' guard is required — "off" is a truthy
+        # string, so this step used to fire on non-6.6 legs with the toggle
+        # OFF and claim "toggle is ON". With the guard, off legs stay truly
+        # silent (no GBP_STATE, no sidecar) → the renderer reports "not
+        # requested" exactly per D4.
+        if: inputs.google_backport && inputs.google_backport != 'off' && inputs.version != 'android15-6.6'
         shell: bash
+        env:
+          GBP_LEG: ${{ inputs.version }}
+          GBP_INPUT: ${{ inputs.google_backport }}
         run: |
           set -euo pipefail
           echo "GBP_STATE=skipped-generation-gate" >> "$GITHUB_ENV"
+          # C2 (plan §4/D4): terminal skip-state sidecar — one line, no patch list.
+          python3 - <<'GBP_GATE_PY'
+          import json, os
+          json.dump({
+              "schema": "google-backport-series/v1",
+              "state": "skipped-generation-gate",
+              "leg": os.environ["GBP_LEG"],
+              "input": os.environ["GBP_INPUT"],
+          }, open("/tmp/google-backport-series.json", "w"), indent=2)
+          GBP_GATE_PY
           {
             echo "### Google upstream backport series"
             echo "- State: skipped — toggle is ON but this leg is \`${{ inputs.version }}\`, outside the android15-6.6 self-gate (family expansion playbook: OQ-1)."
