@@ -1,6 +1,6 @@
 # feature/patches — kernel feature patches (contributor guide)
 
-**Repo:** `chandr1000/GKI_KernelSU_SUSFS` · **Branch:** `feature/patches` · **Status:** operative, boot-validated 2026-11-08
+**Repo:** `chandr1000/GKI_KernelSU_SUSFS` · **Branch:** `feature/patches` · **Status:** operative, boot-validated 2026-11-08 — BORE 5.9.6 enabled on 6.6 (shielded, ABI-silent); other families are probe-stage only
 
 `PATCHES.yml` on this branch is **not documentation — it is the build input**. The kernel CI
 on `main-chandr1000` parses it and applies whatever it says, in list order. If you edit it,
@@ -128,8 +128,9 @@ genksyms hashes **initializer token streams**, not just types. BORE changed one 
 symbol's initializer (`sysctl_sched_base_slice = 750000ULL` → `= nsecs_per_tick`) and one
 `SCHED_FEAT()` entry in `kernel/sched/features.h` (which expands into the initializer
 arrays `sched_feat_names[]` / `sched_feat_keys[]`) — that alone is a deterministic
-3-symbol delta in every BORE-applied run. Those three are scheduler-internal data symbols
-and benign for vendor modules, but they still red a zero-delta gate. **Any feature cost
+3-symbol delta in every unshielded BORE-applied run (the 5.9.6 entry now hides all
+three from genksyms — see §5). Those three are scheduler-internal data symbols
+and benign for vendor modules, but they still red a zero-delta gate when present. **Any feature cost
 must be exactly known and documented** (see §5), never "probably harmless".
 
 ### Rule 3 — Know the KABI slot map before you touch `task_struct` / `sched_entity`
@@ -224,21 +225,34 @@ neighbors so an earlier patch's failure cannot cascade into yours (run 422483829
 | `governor-vorpal` (+ shim) | ✅ | **0** |
 | `governor-bara-no-seidou` | ✅ | **0** |
 | `momentomoix-driver` (+ `momentomoix-selinux`) | ✅ | **0** after D18 (KSM/DMA_CMA removed from its config block) |
-| `fair-gaming-bias` | ✅ | **0** — currently loud-skips: `depends_on` BORE, which is disabled |
-| `bore-scheduler` (5.9.6) | ❌ disabled | exactly **3** data symbols when on: `sched_feat_keys`, `sched_feat_names`, `sysctl_sched_base_slice`; `module_layout` untouched |
+| `fair-gaming-bias` | ✅ | **0** — `depends_on` satisfied again (BORE on); still `best_effort`: read the step summary's `applied N/M` line every run |
+| `bore-scheduler` (5.9.6) | ✅ enabled | **0** shielded (`73985ac2`: features.h / fair.c base-slice / sched.h extern behind `__GENKSYMS__` + enum tripwire); unshielded cost remains exactly **3** data symbols — `sched_feat_keys`, `sched_feat_names`, `sysctl_sched_base_slice`; `module_layout` untouched either way |
 | `bore-scheduler-66-510` (5.1.0) | ❌ | **unknown** — manifest A/B warning: audit its sched.h hunks for raw struct edits *before* enabling |
 
+**Family coverage:** the operative, boot-validated BORE is **6.6 only** — the 5.9.6
+variant (`kernels: ["6.6"]`). Other families run the 5.1.0 generation as *probe* entries
+(`bore-scheduler-legacy-510-515` for 5.10/5.15, `bore-scheduler-legacy-61` for 6.1,
+`bore-scheduler-612` for 6.12, all `best_effort`): they compile but have had no device
+boot validation yet. They catch up later, each owing its own boot A/B before daily use.
+
 Baseline reference: 9,082 symbols; pristine `module_layout` = `0x4e276f37`. The
-known-good state — manifest 5/12 applied (the three governors + momx driver/selinux,
+BORE-off state — manifest 5/12 applied (the three governors + momx driver/selinux,
 BORE family skipped, `fair-gaming-bias` loud-skipped), `CRC deltas: 0 missing: 0
 new: 0`, gate PASS, device boot PASS on Kunzite QRD with 440 vendor modules live, zero
 version disagreements, all three governors registered, momx operational, KSM absent —
-is frozen and archived by the maintainer as the device diff reference.
+was frozen and archived as the first device diff reference. The operative reference
+since 2026-11-08 is **BORE-on** (shielded): same 440-module baseline, zero version
+disagreements, BORE banner + tunables present, governors and momx unaffected; the
+per-run CI evidence line to keep is `CRC deltas: 0 missing: 0 new: 0`.
 
-**Re-enabling BORE later:** its 3-symbol cost is documented and `module_layout` stays
-intact, so vendor modules remain loadable — but the currently boot-validated state is
-BORE-off. A BORE-on kernel must get its own boot A/B before daily use, and enabling BORE
-re-enables `fair-gaming-bias` with it.
+**BORE is on (2026-11-08):** re-enabled at `31a9640b` once the shield landed, then
+device-validated on Kunzite QRD — banner at t=0, `kernel.sched_bore=1` by default with
+the full tunable set under `/proc/sys/kernel/` (`sched_burst_*`, `sched_deadline_boost_mask`).
+Runtime A/B needs no reflash: `echo 0 > /proc/sys/kernel/sched_bore` soft-disables the
+burst-penalty path (≈ vanilla EEVDF burst handling); it is **not persistent** — every
+boot comes up at the default 1, and what is compiled in is decided by the manifest, not
+the sysctl. Enabling BORE also activates `fair-gaming-bias` (`depends_on`); disabling
+BORE loud-skips it again.
 
 ---
 
