@@ -395,6 +395,26 @@ patches:
       Self-contained: the rules.c discovery + D4 warn+skip guard moved
       inside the script (it lived in the old momentx action step). On root
       flavors without a ksu_allow table the driver still builds.
+      AVC FIX (kunzite enforcing dmesg, 2026-11-08): the driver's
+      momx->bara screen-state bridge (momx_sync_bara_no_seidou_screen,
+      module param sync_bara_no_seidou_screen_state) kernel-writes
+      policy*/bara-no-seidou/screen_on on every display transition;
+      target label sysfs_devices_system_cpu. The rule list only granted
+      read-only access there (kernel->sysfs_type file read/open/getattr),
+      so open passed but write was denied — 2 AVCs per transition (one
+      per attached policy: policy0/policy4) and bara's screen_on tunable
+      stayed true forever, keeping its screen_off_cap_pct (35) unarmed.
+      Momx's own screen-off stack kept working, so impact = silent
+      battery-feature loss + log noise, not stability. Fix: exactly ONE
+      added rule, kernel->sysfs_devices_system_cpu file write — the
+      minimal set the AVC evidence asks for; dir search/getattr and file
+      read/open/getattr stay covered by the existing sysfs_type
+      attribute rules (on-device proof: open was never denied). Do NOT
+      widen to sysfs_type write: that would cover leds/backlight/drm/
+      thermal/battery labels too. Escape hatch if a root flavor lacks
+      the table: sync_bara_no_seidou_screen_state=N disables the bridge.
+      Known-benign, no action: com.franco.kernel (untrusted_app) denied
+      read on /proc/sys/kernel/sched_bore — stock policy, app-side probe.
 
 infrastructure:
   - id: abi-gate                          # lives on main-chandr1000 (runner), re-landed by the v3 wiring

@@ -28,7 +28,9 @@ if [[ -z "$RULES_FILE" ]]; then
 fi
 export SELINUX_RULES_C="$RULES_FILE"
 
-# --- original selinux.sh body (byte-identical below this line) ------------
+# --- original selinux.sh body: byte-identical to the v3 original EXCEPT +1
+# --- ksu_allow below (2026-11-08 kunzite AVC fix, see PATCHES.yml
+# --- momentomoix-selinux notes) ------------
 set -euo pipefail
 
 if [[ -z "${SELINUX_RULES_C:-}" ]]; then
@@ -84,6 +86,7 @@ sed -i "/${MARKER//\//\\/}/i\\
     ksu_allow(db, \"kernel\", \"sysfs\", \"file\", \"write\");\\
     ksu_allow(db, \"kernel\", \"sysfs\", \"file\", \"open\");\\
     ksu_allow(db, \"kernel\", \"sysfs\", \"file\", \"getattr\");\\
+    ksu_allow(db, \"kernel\", \"sysfs_devices_system_cpu\", \"file\", \"write\");\\
     ksu_allow(db, \"kernel\", \"cgroup\", \"dir\", \"search\");\\
     ksu_allow(db, \"kernel\", \"cgroup\", \"dir\", \"write\");\\
     ksu_allow(db, \"kernel\", \"cgroup\", \"dir\", \"getattr\");\\
