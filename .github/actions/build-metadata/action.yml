@@ -120,6 +120,57 @@ runs:
           nomount_module_sha256="N/A"
         fi
 
+        # C4 (plan §4, D5): machine-readable features block inside the
+        # Verified Metadata JSON — built from the producer sidecars (C1:
+        # /tmp/feature-patches-verdict.json, C2: /tmp/google-backport-
+        # series.json) when present, {} otherwise. Additive key:
+        # assemble_digest_input.py json.loads the whole fence, so existing
+        # consumers are unaffected. Schema extensions beyond this block are
+        # deferred (D1 — decide later); both sidecars carry schema version
+        # fields so future additions stay additive.
+        python3 - > /tmp/features-metadata.json <<'FEATURES_PY'
+        import json
+
+        def rd(path):
+            try:
+                with open(path) as fh:
+                    return json.load(fh)
+            except Exception:
+                return {}
+
+        fp = rd("/tmp/feature-patches-verdict.json")
+        gb = rd("/tmp/google-backport-series.json")
+
+        fp_out = {}
+        t = fp.get("totals") or {}
+        if fp.get("entries"):
+            fp_out = {
+                "mode": fp.get("mode"),
+                "applied": t.get("applied", 0),
+                "skipped": t.get("skipped", 0),
+                "failed": t.get("failed", 0),
+                "manifest_ref": " @ ".join(
+                    x for x in (str(fp.get("manifest_ref_input", "")),
+                                str(fp.get("manifest_resolved_short_sha", ""))) if x),
+            }
+        elif fp:
+            fp_out = {"mode": fp.get("mode"), "state": fp.get("state")}
+
+        gb_out = {}
+        if gb:
+            gb_out = {"state": gb.get("state")}
+            if gb.get("state") == "applied":
+                gb_out.update({
+                    "ref": gb.get("ref"),
+                    "patches": gb.get("patch_count"),
+                    "categories": gb.get("categories") or {},
+                    "ref_head": gb.get("ref_head"),
+                })
+
+        print(json.dumps({"feature_patches": fp_out, "google_backport": gb_out}))
+        FEATURES_PY
+        FEATURES_JSON="$(cat /tmp/features-metadata.json 2>/dev/null || echo '{}')"
+
         jq -n \
           --arg method "$METHOD" \
           --arg root_implementation "${ROOT_IMPLEMENTATION:-KernelSU-Next (legacy path)}" \
@@ -138,6 +189,7 @@ runs:
           --arg nomount_module_commit "$NOMOUNT_MODULE_COMMIT" \
           --arg nomount_module_url "$nomount_module_url" \
           --arg nomount_module_sha256 "$nomount_module_sha256" \
+          --argjson features "$FEATURES_JSON" \
           --arg status "Build-verified only" \
           --arg catalog_availability "eligible-with-provenance-and-checksums" \
           --arg device_compatibility "not-validated" \
@@ -171,6 +223,7 @@ runs:
               flashability: $flashability,
               boot: $boot
             },
+            features: $features,
             status: $status
           }' > "$metadata_file"
 
@@ -182,6 +235,7 @@ runs:
           (.kernel_source_commit | test("^[0-9a-f]{40}$")) and
           (.artifact_url | startswith("https://")) and
           (.sha256 | test("^sha256:[0-9a-f]{64}$")) and
+          (.features | type == "object") and
           .catalog.availability == "eligible-with-provenance-and-checksums" and
           .catalog.device_compatibility == "not-validated" and
           .catalog.flashability == "not-guaranteed" and
