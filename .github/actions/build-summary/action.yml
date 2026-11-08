@@ -99,6 +99,327 @@ runs:
           SUSFS_VER=$(grep '#define SUSFS_VERSION' "${{ github.workspace }}/kernel/common/include/linux/susfs.h" | awk -F'"' '{print $2}' || echo "N/A")
         fi
 
+        # --- C3 (plan §4): feature-section renderers -------------------------
+        # The two feature steps each emit a machine-readable sidecar (C1:
+        # /tmp/feature-patches-verdict.json, C2: /tmp/google-backport-
+        # series.json). Render them with the same file-if-exists pattern as
+        # the Kernel Fixes block; fail-soft by contract — an unreadable or
+        # missing sidecar renders a visible note and NEVER fails the summary
+        # step (the summary is also the failure-diagnosis artifact). Nothing
+        # about the manifest or the series is hardcoded here: ids, titles,
+        # counts, batch labels and D2 categories all come from the sidecars.
+        cat > /tmp/fp-render.py <<'FP_RENDER_PY'
+        #!/usr/bin/env python3
+        """Feature-patches section renderer for the BuildInfo summary (C3).
+
+        Reads the applier sidecar /tmp/feature-patches-verdict.json (schema
+        feature-patches-verdict/v1, emitted by C1) and prints the section —
+        or, with --metrics, the single metrics-table cell. Fail-soft by
+        contract: any problem renders a visible note and exits 0; the summary
+        is also the failure-diagnosis artifact, so it must never crash.
+        NOTHING about the manifest is hardcoded: ids, titles, kernels, config
+        symbols, counts and verdicts all come from the sidecar snapshot of
+        the exact manifest commit the build used.
+        """
+        import json
+        import os
+        import sys
+
+        SIDECAR = "/tmp/feature-patches-verdict.json"
+        LOGDIR_MARKER = os.path.join(os.environ.get("GITHUB_WORKSPACE", "."),
+                                     "patch-apply-logs")
+        MARKS = {"applied": "✅", "skipped": "⏭️", "failed": "❌"}
+
+
+        def esc(s):
+            return str(s or "").replace("|", "\\|").replace("\n", " ")
+
+
+        def trunc(s, n=80):
+            # D3: non-applied verdict text is cut at 80 chars (…); the full
+            # text stays in the sidecar JSON and the patch-apply-logs artifact.
+            s = esc(s)
+            return s if len(s) <= n else s[: n - 1] + "…"
+
+
+        def load():
+            try:
+                with open(SIDECAR) as fh:
+                    return json.load(fh)
+            except FileNotFoundError:
+                return None
+            except Exception as ex:                   # corrupt/truncated JSON
+                return {"_corrupt": str(ex)}
+
+
+        def render_metrics(d):
+            if d is None:
+                # The applier always creates patch-apply-logs (fetch step): a
+                # missing sidecar + marker means it died before even the
+                # early-FATAL hook.
+                return "applier failed (no verdicts)" if os.path.isdir(LOGDIR_MARKER) else "n/a"
+            if "_corrupt" in d:
+                return "unreadable sidecar"
+            if d.get("state") == "applier-failed":
+                return "applier failed (no verdicts)"
+            t = d.get("totals") or {}
+            row = (f"`{esc(d.get('mode', 'n/a'))}` — {t.get('applied', 0)} applied / "
+                   f"{t.get('skipped', 0)} skipped / {t.get('failed', 0)} failed")
+            if t.get("failed_best_effort"):
+                row += f" (+{t['failed_best_effort']} best-effort warn)"
+            return row
+
+
+        def render_section(d):
+            if d is None:
+                if os.path.isdir(LOGDIR_MARKER):
+                    return ["### Feature patches (manifest-driven)", "",
+                            "- Applier ran but produced no verdict file (early failure) — "
+                            "see the `patch-apply-logs` artifact.", ""]
+                return []
+            if "_corrupt" in d:
+                return [f"_renderer: unreadable sidecar ({SIDECAR}) ({d['_corrupt']})_", ""]
+            if d.get("state") == "applier-failed":
+                return ["### Feature patches (manifest-driven)", "",
+                        f"- Applier failed before verdicts — `{trunc(d.get('reason', ''), 160)}` — "
+                        "see the `patch-apply-logs` artifact.", ""]
+            ref = esc(d.get("manifest_ref_input", ""))
+            sha = esc(d.get("manifest_resolved_short_sha", ""))
+            prov = f" — {ref} @ `{sha}`" if (ref or sha) else ""
+            out = [f"### Feature patches (manifest-driven){prov}", ""]
+            t = d.get("totals") or {}
+            out.append(f"Manifest base: `{esc(d.get('manifest_base', 'n/a'))}` · "
+                       f"kernel gate `{esc(d.get('kernel_version_gate', 'n/a'))}` · "
+                       f"mode `{esc(d.get('mode', 'n/a'))}` · strict={d.get('strict')} · "
+                       f"applied {t.get('applied', 0)}/{t.get('entries', 0)}")
+            out.append("")
+            # D4: features: off → one-liner, never the not-applied table
+            if d.get("mode") == "off":
+                return out + ["- Disabled for this run (`features: off`).", ""]
+            entries = d.get("entries") or []
+            if entries:
+                out += ["| Verdict | id | Title | Kernels | CONFIG |",
+                        "|---|---|---|---|---|"]
+                for e in entries:
+                    st = e.get("verdict_state", "skipped")
+                    verdict = e.get("verdict", "")
+                    mark = MARKS.get(st, "⏭️")
+                    if st != "applied" and str(verdict).startswith("FAILED (best_effort"):
+                        mark = "⚠️"
+                    cell = mark if st == "applied" else f"{mark} {trunc(verdict)}"
+                    kernels = ", ".join(str(k) for k in (e.get("kernels") or [])) or "—"
+                    cfg = e.get("config") or []
+                    out.append(f"| {cell} | {esc(e.get('id'))} | {esc(e.get('title'))} | "
+                               f"{esc(kernels)} | {len(cfg) if cfg else '—'} |")
+                out.append("")
+            sym = [c for e in entries if e.get("verdict_state") == "applied"
+                   for c in (e.get("config") or []) if c]
+            if sym:                                   # D6: collapsible + blank-line padding
+                out += [f"<details><summary>Applied CONFIG symbols ({len(sym)})</summary>",
+                        "", "```"]
+                out += sym
+                out += ["```", "</details>", ""]
+            return out
+
+
+        def main():
+            d = load()
+            if "--metrics" in sys.argv:
+                print(render_metrics(d))
+                return
+            lines = render_section(d)
+            if lines:
+                sys.stdout.write("\n".join(lines) + "\n")
+
+
+        main()
+        FP_RENDER_PY
+        cat > /tmp/gbp-render.py <<'GBP_RENDER_PY'
+        #!/usr/bin/env python3
+        """Google upstream backport section renderer for the BuildInfo summary (C3).
+
+        Reads the series sidecar /tmp/google-backport-series.json (schema
+        google-backport-series/v1, emitted by C2) and prints the section —
+        or, with --metrics, the single metrics-table cell. Falls back to the
+        GBP_* env provenance when the sidecar is missing (belt & braces).
+        Fail-soft by contract: any problem renders a visible note and exits
+        0. Category display names are the D2 taxonomy — the display-side
+        counterpart of classify() in C2 (user-approved labels, 2026-11-08
+        review); raw batch labels, entry lists and counts all come from the
+        sidecar, so a new Batch line in series.conf shows up here with zero
+        renderer changes (D7).
+        """
+        import json
+        import os
+        import sys
+
+        SIDECAR = "/tmp/google-backport-series.json"
+        KMI_PIN = "8d05d8f2439f"   # series-authored base pin (same conditional as build.yml)
+
+        # D2 canonical taxonomy: key → user-approved display name. Raw batch
+        # labels are preserved verbatim underneath each category header.
+        CATS = [
+            ("security", "Security backports (ASB/CVE)"),
+            ("stability", "Stability & bug fixes"),
+            ("maintenance", "Maintenance & cleanups"),
+            ("other", "Other"),
+        ]
+        CAT_KEYS = {k for k, _ in CATS}
+
+
+        def esc(s):
+            return str(s or "").replace("|", "\\|").replace("\n", " ")
+
+
+        def load():
+            try:
+                with open(SIDECAR) as fh:
+                    return json.load(fh)
+            except FileNotFoundError:
+                return None
+            except Exception as ex:
+                return {"_corrupt": str(ex)}
+
+
+        def cat_summary(cats):
+            """'4 security / 94 stability' — counts straight from the sidecar."""
+            parts = [f"{cats[k]} {k}" for k, _ in CATS if cats.get(k)]
+            parts += [f"{v} {k}" for k, v in sorted(cats.items())
+                      if k not in CAT_KEYS and v]
+            return " / ".join(parts)
+
+
+        def render_metrics(d):
+            if d is None:                             # env fallback (belt & braces)
+                state = os.environ.get("GBP_STATE", "")
+                if state == "applied":
+                    return (f"applied ({os.environ.get('GBP_APPLIED', '?')}) — "
+                            f"`{os.environ.get('GBP_REF', '?')}`")
+                if state.startswith("skipped-no-series"):
+                    return "skipped: no series branch"
+                if state.startswith("skipped-generation"):
+                    return "skipped: family gate"
+                if state:
+                    return esc(state)
+                return "not requested"
+            if "_corrupt" in d:
+                return "unreadable sidecar"
+            state = d.get("state")
+            if state == "applied":
+                cats = (f": {cat_summary(d.get('categories') or {})}"
+                        if d.get("categories") else "")
+                return (f"applied ({d.get('patch_count', '?')}{cats}) — "
+                        f"`{d.get('ref', '?')}` @ `{str(d.get('ref_head', ''))[:12]}`")
+            if state == "skipped-no-series-branch":
+                return "skipped: no series branch"
+            if state == "skipped-generation-gate":
+                return "skipped: family gate"
+            if state == "started":
+                return "failed before apply"
+            return esc(state) or "not requested"
+
+
+        def render_section(d):
+            if d is None:
+                state = os.environ.get("GBP_STATE", "")
+                out = ["### Google upstream backport series", ""]
+                if state == "applied":
+                    out.append(f"- State: applied — {os.environ.get('GBP_APPLIED', '?')} patch(es) "
+                               f"from `{os.environ.get('GBP_REF', '?')}` (sidecar missing — see job log).")
+                elif state.startswith("skipped"):
+                    out.append(f"- State: {esc(state)} — no patch list (D4).")
+                elif state:
+                    out.append(f"- State: {esc(state)} — see job log.")
+                else:
+                    out.append("- not requested for this run (`google_backport: off`) — "
+                               "no patch list (D4).")
+                return out + [""]
+            if "_corrupt" in d:
+                return [f"_renderer: unreadable sidecar ({SIDECAR}) ({d['_corrupt']})_", ""]
+            state = d.get("state")
+            if state == "skipped-no-series-branch":
+                cands = ", ".join(d.get("candidates") or []) or "none"
+                return ["### Google upstream backport series", "",
+                        f"- State: skipped — no series branch `{esc(d.get('wanted_branch', '?'))}` "
+                        f"for this leg (auto mode); gki<digits> branches seen: {esc(cands)}.", ""]
+            if state == "skipped-generation-gate":
+                return ["### Google upstream backport series", "",
+                        f"- State: skipped — toggle is ON but this leg is `{esc(d.get('leg', '?'))}`, "
+                        "outside the android15-6.6 self-gate (family expansion playbook: OQ-1).", ""]
+            if state == "started":
+                return ["### Google upstream backport series", "",
+                        "- State: failed before apply — the injection step failed before the "
+                        "series state was finalized; see the job log. No patch list (D4).", ""]
+            if state != "applied":
+                return ["### Google upstream backport series", "",
+                        f"- State: {esc(state)} — see job log.", ""]
+
+            ref = esc(d.get("ref", "?"))
+            out = [f"### Google upstream backport series — `{ref}` @ "
+                   f"`{str(d.get('ref_head', ''))[:12]}`", ""]
+            out.append(f"State: applied — {d.get('patch_count', '?')} patch(es) · "
+                       f"mode `{esc(d.get('mode', '?'))}` · series sha256 (series.conf): "
+                       f"`{esc(d.get('series_conf_sha256_12', '?'))}`")
+            ksc = str(d.get("kernel_source_commit") or "unknown")
+            if ksc.startswith(KMI_PIN):
+                out.append(f"- KMI baseline: series authored against {KMI_PIN}.")
+            else:
+                out.append(f"> ⚠️ Kernel source commit `{esc(ksc)}` is not the series-authored pin "
+                           f"{KMI_PIN} (tag-fallback landed r33, or the tip moved) — strict apply "
+                           "confirmed the series still fits this tree.")
+            if d.get("mode") == "auto" and d.get("candidates"):
+                out.append(f"- gki<digits> branches seen: {esc(', '.join(d['candidates']))}")
+            out.append("")
+
+            cats = d.get("categories") or {}
+            batches = d.get("batches") or []
+            if cats:
+                out += ["| Category | Patches |", "|---|---|"]
+                for key, name in CATS:
+                    if cats.get(key):
+                        label = name
+                        if key == "other":            # show WHY it is unclassified
+                            raws = [b.get("label", "?") for b in batches
+                                    if b.get("category") == "other"]
+                            if raws:
+                                label = "Other — " + "; ".join(esc(r) for r in raws)
+                        out.append(f"| {label} | {cats[key]} |")
+                for k in sorted(k for k in cats if k not in CAT_KEYS):
+                    out.append(f"| {esc(k)} | {cats[k]} |")
+                out.append("")
+
+            total = sum(len(b.get("entries") or []) for b in batches)
+            if total:                                 # D6: collapsible + blank-line padding
+                out += [f"<details><summary>Patch list ({total}, category-grouped)</summary>", ""]
+                for key, name in CATS:
+                    cb = [b for b in batches if b.get("category") == key]
+                    if not cb:
+                        continue
+                    n = sum(len(b.get("entries") or []) for b in cb)
+                    out += [f"**{name}** ({n})", ""]
+                    for b in cb:                      # raw batch label as sub-header (D2)
+                        out += [f"*{esc(b.get('label'))}*", ""]
+                        out += [f"- `{esc(e)}`" for e in (b.get("entries") or [])]
+                        out.append("")
+                out += ["</details>", ""]
+            return out
+
+
+        def main():
+            d = load()
+            if "--metrics" in sys.argv:
+                print(render_metrics(d))
+                return
+            lines = render_section(d)
+            if lines:
+                sys.stdout.write("\n".join(lines) + "\n")
+
+
+        main()
+        GBP_RENDER_PY
+        FP_ROW="$(python3 /tmp/fp-render.py --metrics || true)"
+        GBP_ROW="$(python3 /tmp/gbp-render.py --metrics || true)"
+
         {
           echo "## ${{ inputs.android_version }} ${{ inputs.kernel_version }}.${{ inputs.sublevel }} (${{ inputs.variant }}) - ${STATUS}"
           echo
@@ -121,14 +442,25 @@ runs:
           echo "| **Feature Set** | ${{ inputs.feature_set }} |"
           echo "| **Variant** | ${{ inputs.variant }} |"
           echo "| **Page Size** | ${{ inputs.page_size }} |"
+          echo "| **Google Upstream Backport** | ${GBP_ROW:-n/a} |"
+          echo "| **Feature Patches** | ${FP_ROW:-n/a} |"
           echo
+        } > "$SUMMARY_FILE"
 
-          # Kernel Fixes
-          if [ -f /tmp/kernel-fixes-summary.md ]; then
+        # --- C3 (plan §4): feature sections — appended after the metrics
+        # table, BEFORE Kernel Fixes (plan §5 order: table → features → fixes).
+        # build-metadata appends the Verified Metadata JSON fence later
+        # (build.yml step order), so sections stay above it.
+        python3 /tmp/fp-render.py >> "$SUMMARY_FILE"
+        python3 /tmp/gbp-render.py >> "$SUMMARY_FILE"
+
+        # Kernel Fixes (kernel-fixes action's file-if-exists pattern, unchanged)
+        if [ -f /tmp/kernel-fixes-summary.md ]; then
+          {
             echo "### Kernel Fixes"
             cat /tmp/kernel-fixes-summary.md
             echo
-          fi
-        } > "$SUMMARY_FILE"
+          } >> "$SUMMARY_FILE"
+        fi
 
         echo "summary_base=${SUMMARY_BASE}" >> "$GITHUB_OUTPUT"
