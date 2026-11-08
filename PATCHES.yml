@@ -325,6 +325,30 @@ patches:
       ZRAM_DEF_COMP_ZSTD, SCHEDUTIL/SCHED_MC/TCP_FASTOPEN inline-only
       gates). Gate expectation after this fix: 0 CRC-DELTA.
 
+      TEMP-SCALE TRIAGE (kunzite known-good dmesg, 2026-11-08, fixed in
+      the vendored patch): the thermal loop compared RAW
+      thermal_zoneN/temp values against thermal_threshold_mc and logged
+      them as "mC". This platform reports DECICELSIUS - the known-good
+      session logged 859/937 raw (= 85.9/93.7 C; millicelsius would mean
+      0.86 C, physically impossible, and the charger's set_board_temp
+      logs confirm tenths) - so the 65 C hold could never arm and
+      provably never did (zero "Thermal" lines despite a real ~93.7 C
+      reading); charging-path polls collapsed to 0/78 raw across all
+      scanned zones (bogus, not temperature); the scan was capped at
+      zones 0-14 while the device exposes >=22 (kernel -110 read
+      failures up to thermal_zone21). Fix folded into this patch: scan
+      to 128 zones, select only SoC-temperature type zones
+      (cpu/gpu/soc/aoss/cluster/apc/pop-mem allowlist; no match =>
+      readings disabled, fail-safe, no false arm), skip <= 0 bogus
+      readings, normalize deci -> mC per zone below 2000 raw (no active
+      SoC sensor < 2 C), and return MOMX_TEMP_UNAVAILABLE on no data so
+      hold decisions fail safe. Log lines now carry the winning zone
+      type: "Max Temp: %d mC [%s]". thermal_threshold_mc /
+      thermal_hysteresis_mc are true millicelsius module params
+      (defaults unchanged). Source-only change to the vendored driver
+      file (new-file hunk); ABI surface unchanged, gate expectation
+      stays 0 CRC-DELTA.
+
   - id: momentomoix-selinux
     enabled: true
     kind: script
