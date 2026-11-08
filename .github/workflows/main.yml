@@ -51,11 +51,11 @@ on:
       brand_name:
         description: "Kernel Branding (empty = stock version string)"
         type: string
-        default: Wild
+        default: chandr1000
       keep_kmi:
         description: "Keep stock KMI generation suffix in kernel version (fix #265)"
         type: boolean
-        default: false
+        default: true
       commit_mode:
         description: "latest = branch tips, verified = audited pins, update = build latest then promote verified pins on success"
         required: false
@@ -64,7 +64,7 @@ on:
           - latest
           - verified
           - update
-        default: verified
+        default: latest
       root_flavor:
         description: "Root Flavor"
         type: choice
@@ -77,15 +77,15 @@ on:
           - FinaSU
           - No Root
           - All (KernelSU-Next + KernelSU + BakaSU)
-        default: All (KernelSU-Next + KernelSU + BakaSU)
+        default: SukiSU-Ultra
       use_susfs:
         description: "SUSFS"
         type: boolean
         default: true
       use_nomount:
-        description: "NoMount"
+        description: "NoMount (Encouraged to use LKM mode instead)"
         type: boolean
-        default: true
+        default: false
       use_bbg:
         description: "Baseband Guard"
         type: boolean
@@ -124,7 +124,7 @@ on:
         description: "Google upstream backport series, android15-6.6 legs: off = skip | auto = auto-detect the gki<digits> branch matching the leg's sublevel | any branch/tag/SHA (e.g. 6.6.77-backport-20261104) = pin an exact series state for reproducible builds"
         required: false
         type: string
-        default: "off"
+        default: "auto"
       # 25-input cap: the three old Part-I knobs (use_momentx/use_governors/
       # bore_variant) collapse into ONE features input + a reproducibility
       # pin; per-governor toggles live in PATCHES.yml (manifest rows).
@@ -150,7 +150,7 @@ on:
           - "warn+fail-new"
           - "enforce+fail-new"
           - "off"
-        default: "warn"
+        default: "enforce"
       # 25-input workflow_dispatch cap (GitHub hard limit): two rarely-flipped
       # knobs moved to repo Actions variables (Settings → Secrets and variables
       # → Actions → Variables), same defaults as before:
