@@ -95,5 +95,25 @@ Kernel-based su and root access management for Android.
 
 ---
 
+## Build summary
+
+Every leg's persisted `<file_name>-BuildInfo` artifact lists the two dynamically
+injected patch series with per-entry runtime verdicts — generated at run time
+from repository/CI data (PATCHES.yml, series.conf, `gki<digits>` branch
+discovery, applier verdicts); nothing is hardcoded:
+
+| Section | Data source | Notes |
+|---------|-------------|-------|
+| Feature patches (manifest-driven) | `PATCHES.yml` on the `feature/patches` content ref (sidecar `feature-patches-verdict/v1`) | per-entry applied/skipped/failed verdicts; `features: off` renders a one-liner |
+| Google upstream backport series | `series.conf` on the auto-discovered `gki<V><P><sublevel>` branch (sidecar `google-backport-series/v1`) | patches grouped by canonical category — **Security backports (ASB/CVE)**, **Stability & bug fixes**, **Maintenance & cleanups**, plus an *Other* catch-all for future batches |
+
+The same data ships machine-readable: each sidecar JSON (also in the
+`patch-apply-logs` artifact on failures) and a `features` block inside the
+Verified Metadata JSON fence of every BuildInfo. Adding a patch to the
+manifest or a `Batch C` line to `series.conf` updates the summary
+automatically — no renderer changes.
+
+---
+
 > [!TIP]
 > **Installation** — see [Installation Guide](installation.md).
