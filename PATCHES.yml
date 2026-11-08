@@ -86,6 +86,38 @@ patches:
       android_kabi.h maps them to the stock reserves under
       __GENKSYMS__ already. ABI gate expectation after fix: 0
       CRC-DELTA (was 5,965).
+      KABI-SHIELD COMPLETION (2026-11-08): the vendored patch now
+      genksyms-shields its ENTIRE CRC-visible surface, closing the last
+      3 deltas (sched_feat_keys 0xef80ba0e, sched_feat_names
+      0x8ecc1cca, sysctl_sched_base_slice 0xc8eb9e9e) so bore-scheduler
+      can re-enable at zero deltas. (1) features.h PLACE_REL_DEADLINE
+      hidden behind #ifndef __GENKSYMS__ — debug.c's sched_feat_names[]
+      / sched_feat_keys[] initializer streams stay stock-length under
+      the CRC pass (the arrays are defined in kernel/sched/debug.c at
+      this pin, not features.c). (2) fair.c base_slice block + (3)
+      sched.h base_slice extern block take the stock view under the CRC
+      pass — both declaration paths covered; runtime keeps __read_mostly
+      uint = nsecs_per_tick. TRIPWIRE: a static_assert in fair.c pins
+      __SCHED_FEAT_PLACE_REL_DEADLINE == 2 and __SCHED_FEAT_NR == 25
+      under GKI (stock expands to 24 entries: 25 lines, TTWU_QUEUE
+      split across the PREEMPT_RT branches, HAVE_RT_PUSH_IPI=y) and
+      fires at compile time on ANY foreign SCHED_FEAT addition, whether
+      shielded or not. SHIELD RULE: value-only changes inside shield
+      regions; type or size changes must never hide behind a shield.
+      __GENKSYMS__ exists only in the kbuild CRC preprocessing pass,
+      which produces no object code — shipped binaries are
+      bit-identical to the unshielded BORE build. Slot ledger
+      unchanged: task_struct 1/2 BORE group_burst, 3/4/5 free, 6/7/8
+      DroidSpaces sysvipc; sched_entity 1-4 BORE plus the on_rq
+      u32-to-2x-u8 split (shielded). VERIFIED against stock files @
+      8d05d8f2439f: amended patch passes git apply --check on
+      pin-stock; applied result is byte-identical (13/13 files) to
+      unshielded-BORE plus the shield lines; harness proves the
+      genksyms view hides PLACE_REL_DEADLINE (enum body 25 vs 26
+      members) and the tripwire fires on a foreign SCHED_FEAT line.
+      Expected gate with bore-scheduler enabled: CRC deltas 0, missing
+      0, new 0 (9082/9082). NOTE: bore-scheduler-66-510 (5.1.0 variant)
+      remains UNSHIELDED — do not enable without equivalent shields.
 
   - id: bore-scheduler-66-510            # 6.6 ALTERNATIVE variant (5.1.0 generation)
     enabled: false                       # A/B: enable this, disable bore-scheduler

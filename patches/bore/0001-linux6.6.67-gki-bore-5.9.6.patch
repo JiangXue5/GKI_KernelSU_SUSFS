@@ -20,20 +20,22 @@ block repair). KMI stays stock via the DroidSpaces slot-merge.
 
 Plan: integration_plan_feature_patches_v3.0.0.md section 4 (F1).
 ---
- include/linux/sched.h      |  41 +++-
+ include/linux/sched.h      |  46 +++++
  include/linux/sched/bore.h |  40 ++++
  init/Kconfig               |  17 ++
  kernel/Kconfig.hz          |  17 ++
  kernel/fork.c              |  10 +
  kernel/sched/Makefile      |   1 +
- kernel/sched/bore.c        | 447 +++++++++++++++++++++++++++++++++++++
+ kernel/sched/bore.c        | 447 +++++++++++++++++++++++++++++++++++++++++++++
  kernel/sched/core.c        |   6 +
- kernel/sched/debug.c       |  61 ++++-
- kernel/sched/fair.c        |  87 +++++++-
- kernel/sched/features.h    |   4 +
+ kernel/sched/debug.c       |  61 ++++++-
+ kernel/sched/fair.c        | 105 ++++++++++-
+ kernel/sched/features.h    |  13 ++
  kernel/sched/sched.h       |   9 +
  scripts/setlocalversion    |   2 +-
- 14 files changed, 737 insertions(+), 6 deletions(-)
+ 13 files changed, 769 insertions(+), 5 deletions(-)
+ create mode 100644 include/linux/sched/bore.h
+ create mode 100644 kernel/sched/bore.c
  create mode 100644 include/linux/sched/bore.h
  create mode 100644 kernel/sched/bore.c
 
@@ -853,7 +855,7 @@ index 99b27d9..34e1ccd 100644
  	P(se.avg.runnable_sum);
  	P(se.avg.util_sum);
 diff --git a/kernel/sched/fair.c b/kernel/sched/fair.c
-index 35ffd5b..4e5ff5d 100644
+index 35ffd5b..2f3d4c8 100644
 --- a/kernel/sched/fair.c
 +++ b/kernel/sched/fair.c
 @@ -61,6 +61,10 @@
@@ -867,7 +869,7 @@ index 35ffd5b..4e5ff5d 100644
  /*
   * Targeted preemption latency for CPU-bound tasks:
   *
-@@ -88,16 +92,29 @@ EXPORT_SYMBOL_GPL(sysctl_sched_latency);
+@@ -88,16 +92,47 @@ EXPORT_SYMBOL_GPL(sysctl_sched_latency);
   *
   * (default SCHED_TUNABLESCALING_LOG = *(1+ilog(ncpus))
   */
@@ -884,11 +886,29 @@ index 35ffd5b..4e5ff5d 100644
   * (default: 0.75 msec * (1 + ilog(ncpus)), units: nanoseconds)
   */
 +/* bore: base_slice block - GKI variant of the rejected hunk */
-+#ifdef CONFIG_SCHED_BORE
++#if defined(CONFIG_SCHED_BORE) && !defined(__GENKSYMS__)
 +static const unsigned int nsecs_per_tick       = 1000000000ULL / HZ;
 +unsigned int sysctl_sched_min_base_slice       = CONFIG_MIN_BASE_SLICE_NS;
 +__read_mostly uint sysctl_sched_base_slice     = nsecs_per_tick;
 +EXPORT_SYMBOL_GPL(sysctl_sched_base_slice);
++/* bore-kabi tripwire: stock features.h @ 8d05d8f2439f expands to 24
++ * SCHED_FEAT entries under GKI (HAVE_RT_PUSH_IPI=y, PREEMPT_RT=n; 25
++ * lines -- TTWU_QUEUE is split across the PREEMPT_RT branches);
++ * PLACE_REL_DEADLINE (features.h shield) is the only sanctioned
++ * addition. If this fires, a foreign patch added a feature entry:
++ * re-audit the sched_feat_names/keys genksyms shields and the
++ * Module.symvers contract before shipping. */
++#ifdef HAVE_RT_PUSH_IPI
++static_assert(__SCHED_FEAT_PLACE_REL_DEADLINE == 2 &&
++	      __SCHED_FEAT_NR == 25,
++	      "bore-kabi: unshielded SCHED_FEAT entry detected; "
++	      "see PATCHES.yml bore-scheduler notes");
++#else
++static_assert(__SCHED_FEAT_PLACE_REL_DEADLINE == 2 &&
++	      __SCHED_FEAT_NR == 24,
++	      "bore-kabi: unshielded SCHED_FEAT entry detected; "
++	      "see PATCHES.yml bore-scheduler notes");
++#endif /* HAVE_RT_PUSH_IPI */
 +#else // !CONFIG_SCHED_BORE
  unsigned int sysctl_sched_base_slice			= 750000ULL;
  EXPORT_SYMBOL_GPL(sysctl_sched_base_slice);
@@ -898,7 +918,7 @@ index 35ffd5b..4e5ff5d 100644
  
  /*
   * After fork, child runs first. If set to 0 (default) then
-@@ -231,6 +248,13 @@ static inline void update_load_set(struct load_weight *lw, unsigned long w)
+@@ -231,6 +266,13 @@ static inline void update_load_set(struct load_weight *lw, unsigned long w)
   *
   * This idea comes from the SD scheduler of Con Kolivas:
   */
@@ -912,7 +932,7 @@ index 35ffd5b..4e5ff5d 100644
  static unsigned int get_update_sysctl_factor(void)
  {
  	unsigned int cpus = min_t(unsigned int, num_online_cpus(), 8);
-@@ -261,6 +285,7 @@ static void update_sysctl(void)
+@@ -261,6 +303,7 @@ static void update_sysctl(void)
  	SET_SYSCTL(sched_base_slice);
  #undef SET_SYSCTL
  }
@@ -920,7 +940,7 @@ index 35ffd5b..4e5ff5d 100644
  
  void __init sched_init_granularity(void)
  {
-@@ -738,6 +763,9 @@ static s64 entity_lag(u64 avruntime, struct sched_entity *se)
+@@ -738,6 +781,9 @@ static s64 entity_lag(u64 avruntime, struct sched_entity *se)
  
  	vlag = avruntime - se->vruntime;
  	limit = calc_delta_fair(max_t(u64, 2*se->slice, TICK_NSEC), se);
@@ -930,7 +950,7 @@ index 35ffd5b..4e5ff5d 100644
  
  	return clamp(vlag, -limit, limit);
  }
-@@ -941,6 +969,10 @@ static struct sched_entity *pick_eevdf(struct cfs_rq *cfs_rq)
+@@ -941,6 +987,10 @@ static struct sched_entity *pick_eevdf(struct cfs_rq *cfs_rq)
  	 * until it gets a new slice. See the HACK in set_next_entity().
  	 */
  	if (sched_feat(RUN_TO_PARITY) && curr && curr->vlag == curr->deadline)
@@ -941,7 +961,7 @@ index 35ffd5b..4e5ff5d 100644
  		return curr;
  
  	/* Pick the leftmost entity if it's eligible */
-@@ -999,6 +1031,7 @@ struct sched_entity *__pick_last_entity(struct cfs_rq *cfs_rq)
+@@ -999,6 +1049,7 @@ struct sched_entity *__pick_last_entity(struct cfs_rq *cfs_rq)
   * Scheduling class statistics methods:
   */
  #ifdef CONFIG_SMP
@@ -949,7 +969,7 @@ index 35ffd5b..4e5ff5d 100644
  int sched_update_scaling(void)
  {
  	unsigned int factor = get_update_sysctl_factor();
-@@ -1010,6 +1043,7 @@ int sched_update_scaling(void)
+@@ -1010,6 +1061,7 @@ int sched_update_scaling(void)
  
  	return 0;
  }
@@ -957,7 +977,7 @@ index 35ffd5b..4e5ff5d 100644
  #endif
  #endif
  
-@@ -1185,6 +1219,10 @@ static void update_curr(struct cfs_rq *cfs_rq)
+@@ -1185,6 +1237,10 @@ static void update_curr(struct cfs_rq *cfs_rq)
  	curr->sum_exec_runtime += delta_exec;
  	schedstat_add(cfs_rq->exec_clock, delta_exec);
  
@@ -968,7 +988,7 @@ index 35ffd5b..4e5ff5d 100644
  	curr->vruntime += calc_delta_fair(delta_exec, curr);
  	update_deadline(cfs_rq, curr);
  	update_min_vruntime(cfs_rq);
-@@ -3828,7 +3866,7 @@ static void reweight_eevdf(struct sched_entity *se, u64 avruntime,
+@@ -3828,7 +3884,7 @@ static void reweight_eevdf(struct sched_entity *se, u64 avruntime,
  	se->deadline = avruntime + vslice;
  }
  
@@ -977,7 +997,7 @@ index 35ffd5b..4e5ff5d 100644
  			    unsigned long weight)
  {
  	bool curr = cfs_rq->curr == se;
-@@ -5202,6 +5240,9 @@ place_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int flags)
+@@ -5202,6 +5258,9 @@ place_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int flags)
  	 *
  	 * EEVDF: placement strategy #1 / #2
  	 */
@@ -987,7 +1007,7 @@ index 35ffd5b..4e5ff5d 100644
  	if (sched_feat(PLACE_LAG) && cfs_rq->nr_running) {
  		struct sched_entity *curr = cfs_rq->curr;
  		unsigned long load;
-@@ -5272,8 +5313,18 @@ place_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int flags)
+@@ -5272,8 +5331,18 @@ place_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int flags)
  
  	se->vruntime = vruntime - lag;
  
@@ -1007,7 +1027,7 @@ index 35ffd5b..4e5ff5d 100644
  	 * on average, halfway through their slice, as such start tasks
  	 * off with half a slice to ease into the competition.
  	 */
-@@ -5382,6 +5433,7 @@ static __always_inline void return_cfs_rq_runtime(struct cfs_rq *cfs_rq);
+@@ -5382,6 +5451,7 @@ static __always_inline void return_cfs_rq_runtime(struct cfs_rq *cfs_rq);
  static void
  dequeue_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int flags)
  {
@@ -1015,7 +1035,7 @@ index 35ffd5b..4e5ff5d 100644
  	int action = UPDATE_TG;
  
  	if (entity_is_task(se) && task_on_rq_migrating(task_of(se)))
-@@ -5409,6 +5461,11 @@ dequeue_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int flags)
+@@ -5409,6 +5479,11 @@ dequeue_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int flags)
  	clear_buddies(cfs_rq, se);
  
  	update_entity_lag(cfs_rq, se);
@@ -1027,7 +1047,7 @@ index 35ffd5b..4e5ff5d 100644
  	if (se != cfs_rq->curr)
  		__dequeue_entity(cfs_rq, se);
  	se->on_rq = 0;
-@@ -6855,6 +6912,14 @@ static void dequeue_task_fair(struct rq *rq, struct task_struct *p, int flags)
+@@ -6855,6 +6930,14 @@ static void dequeue_task_fair(struct rq *rq, struct task_struct *p, int flags)
  	bool was_sched_idle = sched_idle_rq(rq);
  
  	util_est_dequeue(&rq->cfs, p);
@@ -1042,7 +1062,7 @@ index 35ffd5b..4e5ff5d 100644
  
  	for_each_sched_entity(se) {
  		cfs_rq = cfs_rq_of(se);
-@@ -8637,16 +8702,25 @@ static void yield_task_fair(struct rq *rq)
+@@ -8637,16 +8720,25 @@ static void yield_task_fair(struct rq *rq)
  	/*
  	 * Are we the only task in the tree?
  	 */
@@ -1068,7 +1088,7 @@ index 35ffd5b..4e5ff5d 100644
  	/*
  	 * Tell update_rq_clock() that we've just updated,
  	 * so we don't do microscopic update in schedule()
-@@ -12775,6 +12849,9 @@ static void task_fork_fair(struct task_struct *p)
+@@ -12775,6 +12867,9 @@ static void task_fork_fair(struct task_struct *p)
  	curr = cfs_rq->curr;
  	if (curr)
  		update_curr(cfs_rq);
@@ -1078,7 +1098,7 @@ index 35ffd5b..4e5ff5d 100644
  	place_entity(cfs_rq, se, ENQUEUE_INITIAL);
  	rq_unlock(rq, &rf);
  }
-@@ -12887,6 +12964,10 @@ static void attach_task_cfs_rq(struct task_struct *p)
+@@ -12887,6 +12982,10 @@ static void attach_task_cfs_rq(struct task_struct *p)
  
  static void switched_from_fair(struct rq *rq, struct task_struct *p)
  {
@@ -1090,22 +1110,31 @@ index 35ffd5b..4e5ff5d 100644
  }
  
 diff --git a/kernel/sched/features.h b/kernel/sched/features.h
-index eb315c7..1a8a2a2 100644
+index eb315c7..b0071e1 100644
 --- a/kernel/sched/features.h
 +++ b/kernel/sched/features.h
-@@ -6,6 +6,10 @@
+@@ -6,6 +6,19 @@
   */
  SCHED_FEAT(PLACE_LAG, true)
  SCHED_FEAT(PLACE_DEADLINE_INITIAL, true)
 +/*
 + * Preserve relative virtual deadline on 'migration'.
++ *
++ * bore-kabi: genksyms must not see this entry, else the initializer
++ * token streams of sched_feat_names[] and sched_feat_keys[]
++ * (kernel/sched/debug.c) change and their CRCs drift from the stock
++ * baseline (measured on 6.6.77 GKI: 0x8ecc1cca/0xef80ba0e ->
++ * 0x36707baf/0x573cdd6b). Real builds compile it; only the CRC pass
++ * (-D__GENKSYMS__) takes the stock-length view.
 + */
++#ifndef __GENKSYMS__
 +SCHED_FEAT(PLACE_REL_DEADLINE, true)
++#endif /* bore-kabi: stock-length initializer lists for the CRC pass */
  SCHED_FEAT(RUN_TO_PARITY, true)
  
  /*
 diff --git a/kernel/sched/sched.h b/kernel/sched/sched.h
-index 581fc21..94985cc 100644
+index 581fc21..a614cc8 100644
 --- a/kernel/sched/sched.h
 +++ b/kernel/sched/sched.h
 @@ -1990,7 +1990,11 @@ static inline void dirty_sched_domain_sysctl(int cpu)
@@ -1124,7 +1153,7 @@ index 581fc21..94985cc 100644
  extern const_debug unsigned int sysctl_sched_nr_migrate;
  extern const_debug unsigned int sysctl_sched_migration_cost;
  
-+#ifdef CONFIG_SCHED_BORE
++#if defined(CONFIG_SCHED_BORE) && !defined(__GENKSYMS__)
 +extern unsigned int sysctl_sched_min_base_slice;
 +extern __read_mostly uint sysctl_sched_base_slice;
 +#else // !CONFIG_SCHED_BORE
