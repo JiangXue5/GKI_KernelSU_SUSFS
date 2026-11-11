@@ -350,6 +350,30 @@ patches:
       Phase A regen lost it here too; compiled only via transitive
       include luck before the fix.
 
+  # --- F4b: Bara-no-Seidou v3 baked defaults ---------------------------------
+  - id: governor-bara-no-seidou-v3-defaults
+    enabled: true
+    kind: patch
+    patch: patches/bara-no-seidou/0002-cpufreq-bara-no-seidou-v3-baked-defaults.patch
+    kernels: ["5.15", "6.1", "6.6", "6.12"]      # touches only the file 0001 creates - same list
+    depends_on: [governor-bara-no-seidou]
+    best_effort: false
+    config: []                                   # no new symbols - inherits 0001's CONFIG
+    title: Bara-no-Seidou v3 baked defaults (battery profile at power-on)
+    author: Irina Shinakawa (chandr1000) # generated from the v3 runtime profile (PROFILE.md)
+    notes: >
+      Cluster-aware compile-in of the finalized v3 runtime profile as the
+      governor's power-on defaults (PROFILE.md; approved
+      PLAN-v3-baked-defaults-patch.md, D1-D5). Classification mirrors the
+      runtime is_little test (cpumask_test_cpu(0,...)) with a
+      single-policy guard (little daily caps neutralized to 100 = no
+      cap); big and prime share the non-little set exactly as the
+      runtime treats them, so 2- and 3-cluster layouts need no
+      conditional code. Only tunables_alloc + one macro touched; sysfs
+      tunables stay writable (patch changes the starting point only).
+      Drop this entry to return to stock defaults. The external 90%
+      scaling_max_freq cap remains script-side on purpose.
+
   # --- F6: fair.c gaming bias -------------------------------------------------
   - id: fair-gaming-bias
     enabled: true

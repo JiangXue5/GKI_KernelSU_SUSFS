@@ -1,0 +1,191 @@
+From 51cc300a7f3b329721d7f0c579a09aae37b043f9 Mon Sep 17 00:00:00 2001
+From: Irina Shinakawa <25380803+chandr1000@users.noreply.github.com>
+Date: Wed, 11 Nov 2026 14:20:00 +0000
+Subject: [PATCH] feat(bara-no-seidou): v3 baked defaults overlay (patch-level
+ profile)
+
+Bake the finalized v3 battery profile (PROFILE.md) as the governor's
+compile-in power-on defaults, cluster-aware:
+
+- classification mirrors the runtime is_little test
+  (cpumask_test_cpu(0, policy->related_cpus)) so baked values can never
+  diverge from what the code reads - never capacity-based
+- big and prime clusters share the non-little set, which is exactly how
+  the runtime treats them; works on 2-cluster (SM6225-class) and
+  3-cluster (SM8450/SM8550-class) layouts unchanged
+- single-policy (homogeneous) systems keep the conservative shape with
+  the little daily caps neutralized to 100 (= cap at max = no cap),
+  since the runtime would otherwise apply 45/60 to the whole SoC -
+  worse than stock (55)
+- full-table parity with the userspace apply script: fields the runtime
+  never reads on a cluster are baked anyway, so sysfs reads back the
+  same complete set on both policies
+- touch_boost_ms 220 -> 120 (the one global tunable, v3 value)
+
+Runtime sysfs tunables remain writable - the patch changes the starting
+point only; dropping this patch returns the device to stock defaults.
+
+Not baked on purpose: the external 90% scaling_max_freq cap (cpufreq
+core state, stays script-side) and screen_on (left at stock true; it is
+runtime display state fed by the momx bridge).
+
+Symbols used: cpumask_weight/cpu_possible_mask/cpumask_test_cpu, all
+from linux/cpumask.h (already in scope - cpumask_test_cpu is used by
+the governor's own init); no KMI surface touched (kernel-internal
+struct, plain #defines only).
+
+Provenance: PROFILE.md v3 (user-final, code-confirmed) per the approved
+PLAN-v3-baked-defaults-patch.md (decision points D1-D5).
+---
+ kernel/sched/cpufreq_bara_no_seidou.c | 117 +++++++++++++++++++++-----
+ 1 file changed, 94 insertions(+), 23 deletions(-)
+
+diff --git a/kernel/sched/cpufreq_bara_no_seidou.c b/kernel/sched/cpufreq_bara_no_seidou.c
+index e8f971c..205d93f 100644
+--- a/kernel/sched/cpufreq_bara_no_seidou.c
++++ b/kernel/sched/cpufreq_bara_no_seidou.c
+@@ -88,7 +88,7 @@ extern int sched_gaming_active;
+ #define BARA_NO_SEIDOU_THERMAL_DISCOUNT_MAX_PCT	(25)	/* extra cut at full throttle */
+ #define BARA_NO_SEIDOU_GAMING_EXIT_DELAY_MS_DEFAULT	(3000)	/* gaming exit hysteresis */
+ 
+-#define BARA_NO_SEIDOU_TOUCH_BOOST_MS_DEFAULT	(220)	/* daily-use smoothness */
++#define BARA_NO_SEIDOU_TOUCH_BOOST_MS_DEFAULT	(120)	/* daily-use smoothness */
+ #define BARA_NO_SEIDOU_SCREEN_OFF_CAP_PCT_DEFAULT	(35)	/* pct of max_freq */
+ 
+ /* Daily UI ramp-assist: a sharp rise in util% - not just a fresh touch
+@@ -1115,38 +1115,109 @@ static struct kobj_type bara_no_seidou_tunables_ktype = {
+ 	.release	= bara_no_seidou_tunables_release,
+ };
+ 
++/* ---- v3 baked defaults (cluster-aware power-on profile) ------------------ */
++/*
++ * Finalized v3 runtime profile baked as compile-in power-on defaults
++ * (PROFILE.md / PLAN-v3-baked-defaults-patch.md). The non-little set is
++ * used for every non-little cluster (big and prime alike - the runtime
++ * treats them identically); the little set only for the policy holding
++ * logical CPU 0 on a multi-policy system. Fields the runtime never reads
++ * on a given cluster are baked anyway (full-table parity with the
++ * userspace apply script), so sysfs reads back the same complete set
++ * either way.
++ */
++#define V3_UP_RATE_BIG_US		(35000)
++#define V3_UP_RATE_LITTLE_US		(20000)
++#define V3_DOWN_RATE_NORMAL_US		(0)
++#define V3_DOWN_RATE_GAME_US		(8000)
++#define V3_HEADROOM_G_LITTLE_PCT	(25)
++#define V3_HEADROOM_G_BIG_PCT		(15)
++#define V3_MAX_STEP_PCT			(35)
++#define V3_HISPEED_LOAD_BIG		(90)
++#define V3_HISPEED_LOAD_LITTLE		(85)
++#define V3_HISPEED_PCT_BIG		(65)
++#define V3_HISPEED_PCT_LITTLE		(70)
++#define V3_EMA_UP_BIG			(4)
++#define V3_EMA_UP_LITTLE		(3)
++#define V3_EMA_DOWN			(0)
++#define V3_EXIT_BIG_MS			(2000)
++#define V3_EXIT_LITTLE_MS		(3000)
++#define V3_SCREEN_OFF_CAP_PCT		(25)
++#define V3_RAMP_DELTA_PCT		(35)
++#define V3_UI_BOOST_MS			(80)
++#define V3_LITTLE_CAP_PCT		(45)
++#define V3_LITTLE_BOOST_CAP_PCT		(60)
++#define V3_LITTLE_FLOOR_PCT		(20)
++#define V3_BIG_UI_FLOOR_PCT		(0)
++#define V3_BIG_UI_FLOOR_LITTLE_INERT	(25)
++#define V3_PSI_FLOOR_THRESH_BIG		(25)
++#define V3_PSI_FLOOR_THRESH_LITTLE	(0)
++#define V3_PSI_FLOOR_PCT_BIG		(60)
++#define V3_PSI_FLOOR_PCT_LITTLE		(70)
++#define V3_PSI_MEM_THRESH		(15)
++#define V3_PSI_MEM_PCT			(70)
++
+ static struct bara_no_seidou_tunables *bara_no_seidou_tunables_alloc(struct cpufreq_policy *policy)
+ {
+ 	struct bara_no_seidou_tunables *t;
++	bool homogeneous, little;
+ 	int ret;
+ 
+ 	t = kzalloc(sizeof(*t), GFP_KERNEL);
+ 	if (!t)
+ 		return NULL;
+ 
+-	t->up_rate_limit_normal_us	= BARA_NO_SEIDOU_UP_RATE_LIMIT_NORMAL_US;
+-	t->down_rate_limit_normal_us	= BARA_NO_SEIDOU_DOWN_RATE_LIMIT_NORMAL_US;
+-	t->down_rate_limit_game_us	= BARA_NO_SEIDOU_DOWN_RATE_LIMIT_GAME_US;
+-	t->headroom_gaming_little_pct	= BARA_NO_SEIDOU_HEADROOM_GAMING_LITTLE_PCT_DEFAULT;
+-	t->headroom_gaming_big_pct	= BARA_NO_SEIDOU_HEADROOM_GAMING_BIG_PCT_DEFAULT;
+-	t->max_step_pct			= BARA_NO_SEIDOU_MAX_STEP_PCT_DEFAULT;
+-	t->hispeed_load			= BARA_NO_SEIDOU_HISPEED_LOAD_DEFAULT;
+-	t->hispeed_freq_pct		= BARA_NO_SEIDOU_HISPEED_FREQ_PCT_DEFAULT;
+-	t->ema_up_shift			= BARA_NO_SEIDOU_EMA_UP_SHIFT_DEFAULT;
+-	t->ema_down_shift		= BARA_NO_SEIDOU_EMA_DOWN_SHIFT_DEFAULT;
+-	t->gaming_exit_delay_ms		= BARA_NO_SEIDOU_GAMING_EXIT_DELAY_MS_DEFAULT;
++	/*
++	 * v3 baked defaults: classify the cluster exactly like the runtime
++	 * does (policy containing logical CPU 0 = little) so the baked
++	 * values can never diverge from what the code reads. On a
++	 * single-policy (homogeneous) system the conservative shape is
++	 * kept with the little daily caps neutralized below - the runtime
++	 * would otherwise apply them to the whole SoC.
++	 */
++	homogeneous = cpumask_weight(cpu_possible_mask) ==
++		      cpumask_weight(policy->related_cpus);
++	little = !homogeneous && cpumask_test_cpu(0, policy->related_cpus);
++
++#define BARA_SET(field, big_v, little_v)	((t)->field = little ? (little_v) : (big_v))
++
++	BARA_SET(up_rate_limit_normal_us,	V3_UP_RATE_BIG_US,	V3_UP_RATE_LITTLE_US);
++	BARA_SET(down_rate_limit_normal_us,	V3_DOWN_RATE_NORMAL_US,	V3_DOWN_RATE_NORMAL_US);
++	BARA_SET(down_rate_limit_game_us,	V3_DOWN_RATE_GAME_US,	V3_DOWN_RATE_GAME_US);
++	BARA_SET(headroom_gaming_little_pct,	V3_HEADROOM_G_LITTLE_PCT,	V3_HEADROOM_G_LITTLE_PCT);
++	BARA_SET(headroom_gaming_big_pct,	V3_HEADROOM_G_BIG_PCT,	V3_HEADROOM_G_BIG_PCT);
++	BARA_SET(max_step_pct,		V3_MAX_STEP_PCT,		V3_MAX_STEP_PCT);
++	BARA_SET(hispeed_load,		V3_HISPEED_LOAD_BIG,	V3_HISPEED_LOAD_LITTLE);
++	BARA_SET(hispeed_freq_pct,	V3_HISPEED_PCT_BIG,		V3_HISPEED_PCT_LITTLE);
++	BARA_SET(ema_up_shift,		V3_EMA_UP_BIG,		V3_EMA_UP_LITTLE);
++	BARA_SET(ema_down_shift,	V3_EMA_DOWN,		V3_EMA_DOWN);
++	BARA_SET(gaming_exit_delay_ms,	V3_EXIT_BIG_MS,		V3_EXIT_LITTLE_MS);
+ 	t->touch_boost_ms		= BARA_NO_SEIDOU_TOUCH_BOOST_MS_DEFAULT;
+-	t->screen_off_cap_pct		= BARA_NO_SEIDOU_SCREEN_OFF_CAP_PCT_DEFAULT;
+-	t->ramp_delta_pct		= BARA_NO_SEIDOU_RAMP_DELTA_PCT_DEFAULT;
+-	t->ui_boost_ms			= BARA_NO_SEIDOU_UI_BOOST_MS_DEFAULT;
+-	t->little_cap_pct		= BARA_NO_SEIDOU_LITTLE_CAP_PCT_DEFAULT;
+-	t->little_boost_cap_pct	= BARA_NO_SEIDOU_LITTLE_BOOST_CAP_PCT_DEFAULT;
+-	t->little_ui_floor_pct		= BARA_NO_SEIDOU_LITTLE_UI_FLOOR_PCT_DEFAULT;
+-	t->big_ui_floor_pct		= BARA_NO_SEIDOU_BIG_UI_FLOOR_PCT_DEFAULT;
+-	t->psi_cpu_floor_thresh		= BARA_NO_SEIDOU_PSI_CPU_FLOOR_THRESH_DEFAULT;
+-	t->psi_cpu_floor_pct		= BARA_NO_SEIDOU_PSI_CPU_FLOOR_PCT_DEFAULT;
+-	t->psi_mem_cap_thresh		= BARA_NO_SEIDOU_PSI_MEM_CAP_THRESH_DEFAULT;
+-	t->psi_mem_cap_pct		= BARA_NO_SEIDOU_PSI_MEM_CAP_PCT_DEFAULT;
++	BARA_SET(screen_off_cap_pct,	V3_SCREEN_OFF_CAP_PCT,	V3_SCREEN_OFF_CAP_PCT);
++	BARA_SET(ramp_delta_pct,	V3_RAMP_DELTA_PCT,		V3_RAMP_DELTA_PCT);
++	BARA_SET(ui_boost_ms,		V3_UI_BOOST_MS,		V3_UI_BOOST_MS);
++	BARA_SET(little_cap_pct,	V3_LITTLE_CAP_PCT,		V3_LITTLE_CAP_PCT);
++	BARA_SET(little_boost_cap_pct,	V3_LITTLE_BOOST_CAP_PCT,	V3_LITTLE_BOOST_CAP_PCT);
++	BARA_SET(little_ui_floor_pct,	V3_LITTLE_FLOOR_PCT,		V3_LITTLE_FLOOR_PCT);
++	BARA_SET(big_ui_floor_pct,	V3_BIG_UI_FLOOR_PCT,		V3_BIG_UI_FLOOR_LITTLE_INERT);
++	BARA_SET(psi_cpu_floor_thresh,	V3_PSI_FLOOR_THRESH_BIG,	V3_PSI_FLOOR_THRESH_LITTLE);
++	BARA_SET(psi_cpu_floor_pct,	V3_PSI_FLOOR_PCT_BIG,		V3_PSI_FLOOR_PCT_LITTLE);
++	BARA_SET(psi_mem_cap_thresh,	V3_PSI_MEM_THRESH,		V3_PSI_MEM_THRESH);
++	BARA_SET(psi_mem_cap_pct,	V3_PSI_MEM_PCT,		V3_PSI_MEM_PCT);
++
++#undef BARA_SET
++
++	/*
++	 * Homogeneous (single-policy) system: the runtime still classifies
++	 * it as little and unconditionally applies the little daily caps,
++	 * so neutralize them here (100 = cap at max = no cap). Baking
++	 * 45/60 would throttle such devices below stock behaviour.
++	 */
++	if (homogeneous) {
++		t->little_cap_pct = 100;
++		t->little_boost_cap_pct = 100;
++	}
++
+ 	t->thermal_aware		= true;
+ 	t->screen_on			= true;
+ 
+-- 
+2.47.3
+
+
