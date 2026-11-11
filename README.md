@@ -142,7 +142,7 @@ pristine base (incident run 42292466832). Current slot map:
 
 | struct | slots |
 |---|---|
-| `task_struct` | 1/2 BORE `group_burst` · 3/4/5 free · 6/7/8 DroidSpaces sysvipc |
+| `task_struct` | 1/2 Google `dmabuf_info` + `user_dumpable` (≥2025-08 release branches; free on older pins) · 3/4 BORE `group_burst` · 5 free · 6/7/8 DroidSpaces sysvipc |
 | `sched_entity` | 1–4 BORE |
 
 Take free slots only, and keep your hunk's pre/post-image **byte-identical against both
@@ -226,7 +226,7 @@ neighbors so an earlier patch's failure cannot cascade into yours (run 422483829
 | `governor-bara-no-seidou` | ✅ | **0** |
 | `momentomoix-driver` (+ `momentomoix-selinux`) | ✅ | **0** after D18 (KSM/DMA_CMA removed from its config block) |
 | `fair-gaming-bias` | ✅ | **0** — `depends_on` satisfied again (BORE on); still `best_effort`: read the step summary's `applied N/M` line every run |
-| `bore-scheduler` (5.9.6) | ✅ enabled | **0** shielded (`73985ac2`: features.h / fair.c base-slice / sched.h extern behind `__GENKSYMS__` + enum tripwire); unshielded cost remains exactly **3** data symbols — `sched_feat_keys`, `sched_feat_names`, `sysctl_sched_base_slice`; `module_layout` untouched either way |
+| `bore-scheduler` (5.9.6, wide-compat regen) | ✅ enabled | **0** shielded (`73985ac2` shields unchanged; group_burst moved slots 1/2→3/4 — same `_ANDROID_KABI_REPLACE` genksyms view); unshielded cost remains exactly **3** data symbols — `sched_feat_keys`, `sched_feat_names`, `sysctl_sched_base_slice`; `module_layout` untouched either way. Applies 6.6.46→6.6.144+ via `bore-scheduler-compat` era micro-patches (34-pin matrix green) |
 | `bore-scheduler-66-510` (5.1.0) | ❌ | **unknown** — manifest A/B warning: audit its sched.h hunks for raw struct edits *before* enabling |
 
 **Family coverage:** the operative, boot-validated BORE is **6.6 only** — the 5.9.6

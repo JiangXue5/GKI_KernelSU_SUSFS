@@ -38,7 +38,7 @@ patches:
   - id: bore-scheduler                   # 6.6 default variant (5.9.6 generation)
     enabled: true
     kind: patch
-    patch: patches/bore/0001-linux6.6.67-gki-bore-5.9.6.patch
+    patch: patches/bore/0001-linux6.6-gki-bore-5.9.6.patch
     kernels: ["6.6"]
     depends_on: []
     best_effort: false
@@ -118,6 +118,80 @@ patches:
       Expected gate with bore-scheduler enabled: CRC deltas 0, missing
       0, new 0 (9082/9082). NOTE: bore-scheduler-66-510 (5.1.0 variant)
       remains UNSHIELDED — do not enable without equivalent shields.
+      WIDE-COMPAT REGEN (2026-11-11, 6.6.30..6.6.144 pin-matrix incident):
+      the vendored form failed strict preflight on 15 of the 21 logged
+      pins, in three drift eras. (a) <=6.6.58: kernel/fork.c lacked
+      linux/tick.h (it entered the tree between 6.6.58 and 6.6.66) and
+      scripts/setlocalversion still had the pre-rewrite 4-tab $short
+      block. (b) >=6.6.92: upstream backported the 0.70 ms base slice
+      (750000ULL -> 700000ULL, "0.75 msec" -> "0.70 msec" comment) into
+      the fair.c sysctl block this patch rewrites. (c) >=2025-08 release
+      branches (and r00 tags from 6.6.102 onward): Google CONSUMED
+      task_struct KABI slots 1/2 - ANDROID_KABI_USE(1, struct
+      task_dma_buf_info *dmabuf_info) and ANDROID_KABI_USE(2, the
+      user_dumpable bitfield; verified on android15-6.6-2025-09+ and
+      android15-6.6.102_r00+) - and inserted linux/dma-buf.h into
+      fork.c's include run, so the old slots-1/2 hunk pre-image and the
+      tick.h->cpufreq_times.h anchor no longer exist there. THE BUILD
+      TREE IS THE KMI RELEASE BRANCH (per kernel/manifest), NOT the r00
+      tag - tag-level diffing proves nothing about these pins; see the
+      plan doc. FIX (this entry, renamed 0001-linux6.6-gki-bore-5.9.6.patch):
+      fork.c bore.h include re-anchored on the asm/tlbflush.h ->
+      trace/events/sched.h run (byte-stable on every 6.6 pin; the dead
+      CONFIG_USER_NS include of the vendored port is dropped - nothing
+      in the BORE additions references user_namespace); task_struct
+      group_burst moved slots 1/2 -> 3/4 (the RESERVE(3)/(4)/(5) run is
+      unique to task_struct and free on every 6.6 pin; identical
+      _ANDROID_KABI_REPLACE mechanics, genksyms view unchanged, CRC
+      ledger unchanged); fair.c + setlocalversion moved OUT of this
+      patch into bore-scheduler-compat (era micro-patches, tree-probed).
+      VERIFIED: 34-pin stock-source matrix (tags 6.6.46..6.6.144_r00 +
+      release branches 2025-09..lts) - core green everywhere, compat
+      ladder green everywhere, post-checks green; the vendored form's
+      failures reproduce the run-log eras exactly (stage A of
+      verify/bore-compat-matrix.md, bore-66-compat package). Slot
+      ledger SUPERSEDES the round-2 note above: task_struct 1/2 =
+      Google dmabuf_info/user_dumpable (>=2025-08 branches; free on
+      older pins), 3/4 = BORE group_burst, 5 free, 6/7/8 DroidSpaces
+      sysvipc; sched_entity 1-4 BORE. fair-gaming-bias now also depends
+      on bore-scheduler-compat (its anchors live on the post-BORE
+      fair.c).
+
+  - id: bore-scheduler-compat            # 6.6 era-compat micro-patches (fair.c sysctl + setlocalversion)
+    enabled: true
+    kind: script
+    script: scripts/bore_compat_apply.sh
+    kernels: ["6.6"]
+    depends_on: [bore-scheduler]
+    best_effort: false                   # no-match must be LOUD: a silent skip leaves bore.o
+                                         # referencing sysctl_sched_min_base_slice and fails
+                                         # at link time with a confusing error (Rule 9)
+    config: []
+    title: BORE 6.6 family compat (era-probed fair.c sysctl block + setlocalversion suppress)
+    author: "Irina Shinakawa (chandr1000) -- era split + tree-probe ladder"
+    notes: >
+      WIDE-COMPAT COMPANION (2026-11-11): two regions of the BORE surface
+      have era-divergent STOCK text across android15-6.6 that no single
+      strict git-apply hunk can serve. (1) kernel/sched/fair.c
+      base_slice block: <=6.6.89 stock carries 750000ULL ("0.75 msec"),
+      >=6.6.92 carries 700000ULL ("0.70 msec" upstream base-slice
+      backport; first GKI evidence: android15-6.6.92_r00, the
+      2025-08-era builds). (2) scripts/setlocalversion: the $short
+      echo "+" block was rewritten upstream (count-based guard, 2-tab
+      indent) - 4-tab shape on <=6.6.58 pins, new shape on >=6.6.66.
+      The script probes the tree with grep and applies the matching
+      micro-patch from patches/bore/compat/ (0002 fair-750, 0003
+      fair-700, 0004 slv-v2, 0005 slv-v1) under the same strict
+      git apply --check + git apply discipline; an unrecognized shape
+      ladders through both candidates' preflight and then hard-fails
+      loudly with re-run instructions. Post-checks grep the applied
+      result (sysctl_sched_min_base_slice present, BORE
+      tunable_scaling override present, short-marker suppressed) so a
+      half-apply can never pass silently. depends_on bore-scheduler:
+      the micros complete the BORE sysctl surface the core patch
+      deliberately excludes; fair-gaming-bias consumes the resulting
+      post-BORE fair.c shape. VERIFIED on the 34-pin matrix (see
+      bore-scheduler notes + verify/bore-compat-matrix.md).
 
   - id: bore-scheduler-66-510            # 6.6 ALTERNATIVE variant (5.1.0 generation)
     enabled: false                       # A/B: enable this, disable bore-scheduler
@@ -282,7 +356,7 @@ patches:
     kind: patch
     patch: patches/gaming-bias/0001-fair-c-gaming-mode-bias.patch
     kernels: ["6.6"]                        # anchors cut against EEVDF 6.6.77 post-BORE
-    depends_on: [governor-vorpal, bore-scheduler]
+    depends_on: [governor-vorpal, bore-scheduler, bore-scheduler-compat]
     best_effort: true                     # anchor drift ⇒ warn + skip, never red (D16)
     title: CFS gaming-mode bias (vruntime stretch / half-slice yield / migration isolation)
     author: "MomenToMoiX project (koneko_dev); EEVDF 6.6 anchor port: this repo"
