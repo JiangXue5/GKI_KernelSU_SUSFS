@@ -1,0 +1,31 @@
+name: bore-compat-matrix
+# Weekly + manual probe: verifies the BORE 6.6 wide-compat patch set against
+# every stock GKI android15-6.6 pin (tags 6.6.46..6.6.144_r00 + release
+# branches 2025-09..lts). Fails LOUD on any era regression so a new Google
+# backport that drifts the anchors shows up here, not in a device build.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 4 * * 1"   # Mondays 04:23 UTC
+
+jobs:
+  matrix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/patches
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Run the 34-pin bore compat matrix
+        run: |
+          python3 verify/bore_compat_matrix.py | tee matrix.log
+      - name: Upload matrix report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bore-compat-matrix
+          path: |
+            verify/bore-compat-matrix.md
+            matrix.log
