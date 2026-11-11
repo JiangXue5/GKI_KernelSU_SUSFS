@@ -1,0 +1,22 @@
+From 9eb1587814048eb3ebecc80c5e2c1f7ada64aab4 Mon Sep 17 00:00:00 2001
+From: Irina Shinakawa <25380803+chandr1000@users.noreply.github.com>
+Date: Fri, 6 Nov 2026 15:00:00 +0000
+Subject: [PATCH] fix(bore): setlocalversion short-version suppress (v1 shape, <=6.6.58)
+
+Same edit for the pre-rewrite scripts/setlocalversion shape
+(git-describe based, 4-tab indent, GKI pins <=6.6.58). Selected by
+scripts/bore_compat_apply.sh.
+---
+diff --git a/scripts/setlocalversion b/scripts/setlocalversion
+index 38b96c6..1236da2 100755
+--- a/scripts/setlocalversion
++++ b/scripts/setlocalversion
+@@ -92,7 +92,7 @@ scm_version()
+ 		# If only the short version is requested, don't bother
+ 		# running further git commands
+ 		if $short; then
+-			echo "+"
++			#echo "+"
+ 			return
+ 		fi
+ 		# If we are past the tagged commit, we pretty print it.

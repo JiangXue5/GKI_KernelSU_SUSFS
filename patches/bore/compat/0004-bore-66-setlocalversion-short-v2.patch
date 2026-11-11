@@ -1,0 +1,24 @@
+From 9eb1587814048eb3ebecc80c5e2c1f7ada64aab4 Mon Sep 17 00:00:00 2001
+From: Irina Shinakawa <25380803+chandr1000@users.noreply.github.com>
+Date: Fri, 6 Nov 2026 15:00:00 +0000
+Subject: [PATCH] fix(bore): setlocalversion short-version suppress (v2 shape, >=6.6.66)
+
+Suppresses the "+" dirty-marker on short kernel versions for the
+post-rewrite scripts/setlocalversion shape (count-based, 2-tab
+indent, GKI pins 6.6.66+). Selected by scripts/bore_compat_apply.sh.
+---
+diff --git a/scripts/setlocalversion b/scripts/setlocalversion
+index 5818465..584b0d1 100755
+--- a/scripts/setlocalversion
++++ b/scripts/setlocalversion
+@@ -113,7 +113,7 @@ scm_version()
+ 		# If only the short version is requested, don't bother
+ 		# running further git commands
+ 		if $short; then
+-			echo "+"
++			#echo "+"
+ 			return
+ 		fi
+ 
+-- 
+2.47.3
