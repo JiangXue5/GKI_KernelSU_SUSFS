@@ -60,9 +60,11 @@ on:
         type: string
         default: ""
       brand_name:
+        # Empty by default: the caller decides, and an empty value must survive
+        # the parent -> child hop instead of being replaced by a brand here.
         required: false
         type: string
-        default: Wild
+        default: ''
       keep_kmi:
         required: false
         type: boolean

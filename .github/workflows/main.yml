@@ -48,7 +48,7 @@ on:
       brand_name:
         description: "Kernel Branding (empty = stock version string)"
         type: string
-        default: Wild
+        default: ''
       keep_kmi:
         description: "Keep stock KMI generation suffix in kernel version (fix #265)"
         type: boolean
@@ -701,6 +701,7 @@ jobs:
       ksu_branch: ${{ needs.resolve-sources.outputs.kernelsu_commit }}
       anykernel3_commit: ${{ needs.resolve-sources.outputs.anykernel3_commit }}
       droidspaces_commit: ${{ needs.resolve-sources.outputs.droidspaces_commit }}
+      # schedule => "Wild" (nightly tag); manual => the input verbatim (empty default = stock)
       brand_name: ${{ github.event_name == 'schedule' && 'Wild' || inputs.brand_name }}
       keep_kmi: ${{ inputs.keep_kmi || false }}
       os_patch_level: ${{ inputs.os_patch_level || 'All' }}
@@ -731,6 +732,7 @@ jobs:
       ksu_branch: ${{ needs.resolve-sources.outputs.kernelsu_commit }}
       anykernel3_commit: ${{ needs.resolve-sources.outputs.anykernel3_commit }}
       droidspaces_commit: ${{ needs.resolve-sources.outputs.droidspaces_commit }}
+      # schedule => "Wild" (nightly tag); manual => the input verbatim (empty default = stock)
       brand_name: ${{ github.event_name == 'schedule' && 'Wild' || inputs.brand_name }}
       keep_kmi: ${{ inputs.keep_kmi || false }}
       os_patch_level: ${{ inputs.os_patch_level || 'All' }}
@@ -761,6 +763,7 @@ jobs:
       ksu_branch: ${{ needs.resolve-sources.outputs.kernelsu_commit }}
       anykernel3_commit: ${{ needs.resolve-sources.outputs.anykernel3_commit }}
       droidspaces_commit: ${{ needs.resolve-sources.outputs.droidspaces_commit }}
+      # schedule => "Wild" (nightly tag); manual => the input verbatim (empty default = stock)
       brand_name: ${{ github.event_name == 'schedule' && 'Wild' || inputs.brand_name }}
       keep_kmi: ${{ inputs.keep_kmi || false }}
       os_patch_level: ${{ inputs.os_patch_level || 'All' }}
@@ -791,6 +794,7 @@ jobs:
       ksu_branch: ${{ needs.resolve-sources.outputs.kernelsu_commit }}
       anykernel3_commit: ${{ needs.resolve-sources.outputs.anykernel3_commit }}
       droidspaces_commit: ${{ needs.resolve-sources.outputs.droidspaces_commit }}
+      # schedule => "Wild" (nightly tag); manual => the input verbatim (empty default = stock)
       brand_name: ${{ github.event_name == 'schedule' && 'Wild' || inputs.brand_name }}
       keep_kmi: ${{ inputs.keep_kmi || false }}
       os_patch_level: ${{ inputs.os_patch_level || 'All' }}
@@ -821,6 +825,7 @@ jobs:
       ksu_branch: ${{ needs.resolve-sources.outputs.kernelsu_commit }}
       anykernel3_commit: ${{ needs.resolve-sources.outputs.anykernel3_commit }}
       droidspaces_commit: ${{ needs.resolve-sources.outputs.droidspaces_commit }}
+      # schedule => "Wild" (nightly tag); manual => the input verbatim (empty default = stock)
       brand_name: ${{ github.event_name == 'schedule' && 'Wild' || inputs.brand_name }}
       keep_kmi: ${{ inputs.keep_kmi || false }}
       os_patch_level: ${{ inputs.os_patch_level || 'All' }}
@@ -851,6 +856,7 @@ jobs:
       ksu_branch: ${{ needs.resolve-sources.outputs.kernelsu_commit }}
       anykernel3_commit: ${{ needs.resolve-sources.outputs.anykernel3_commit }}
       droidspaces_commit: ${{ needs.resolve-sources.outputs.droidspaces_commit }}
+      # schedule => "Wild" (nightly tag); manual => the input verbatim (empty default = stock)
       brand_name: ${{ github.event_name == 'schedule' && 'Wild' || inputs.brand_name }}
       keep_kmi: ${{ inputs.keep_kmi || false }}
       os_patch_level: ${{ inputs.os_patch_level || 'All' }}
@@ -881,6 +887,7 @@ jobs:
       ksu_branch: ${{ needs.resolve-sources.outputs.kernelsu_commit }}
       anykernel3_commit: ${{ needs.resolve-sources.outputs.anykernel3_commit }}
       droidspaces_commit: ${{ needs.resolve-sources.outputs.droidspaces_commit }}
+      # schedule => "Wild" (nightly tag); manual => the input verbatim (empty default = stock)
       brand_name: ${{ github.event_name == 'schedule' && 'Wild' || inputs.brand_name }}
       keep_kmi: ${{ inputs.keep_kmi || false }}
       os_patch_level: ${{ inputs.os_patch_level || 'All' }}
@@ -916,6 +923,7 @@ jobs:
       ksu_branch: ${{ needs.resolve-sources.outputs.kernelsu_commit }}
       anykernel3_commit: ${{ needs.resolve-sources.outputs.anykernel3_commit }}
       droidspaces_commit: ${{ needs.resolve-sources.outputs.droidspaces_commit }}
+      # schedule => "Wild" (nightly tag); manual => the input verbatim (empty default = stock)
       brand_name: ${{ github.event_name == 'schedule' && 'Wild' || inputs.brand_name }}
       keep_kmi: ${{ inputs.keep_kmi || false }}
       os_patch_level: ${{ inputs.os_patch_level || 'All' }}
