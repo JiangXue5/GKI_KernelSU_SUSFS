@@ -28,14 +28,44 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          TAGS=$(gh release list --limit 1000 --json tagName,name --jq -r '.[] | select(.name == "General Cache") | .tagName')
+
+          # gh release list --jq takes a jq expression only: "-r" is not a flag of
+          # this command, so it used to be parsed as an extra argument and made
+          # the whole step fail. gh --jq already prints strings unquoted.
+          if ! RELEASES=$(gh release list --limit 1000 --json tagName,name --jq '.[] | select(.name == "General Cache") | .tagName'); then
+            echo "::error::Failed to list releases."
+            exit 1
+          fi
+
+          TAGS=$(printf '%s\n' "$RELEASES" | sed '/^[[:space:]]*$/d')
+
           if [ -z "$TAGS" ]; then
             echo "No General Cache releases found. Nothing to do."
             exit 0
           fi
-          echo "$TAGS" | while read -r tag; do
+
+          TAG_COUNT=$(printf '%s\n' "$TAGS" | wc -l | tr -d '[:space:]')
+          echo "Releases to delete (${TAG_COUNT}):"
+          printf '%s\n' "$TAGS" | sed 's/^/  - /'
+
+          FAILED=0
+          DELETED=0
+          # Here-string (not a pipe) keeps the loop in the current shell, so the
+          # counters survive; a pipe would run it in a subshell and lose them.
+          while IFS= read -r tag; do
             [ -n "$tag" ] || continue
             echo "Deleting release + tag: $tag"
-            gh release delete "$tag" --cleanup-tag -y || echo "WARNING: failed to delete $tag (continuing)"
-          done
-          echo "Done."
+            if gh release delete "$tag" --cleanup-tag -y; then
+              DELETED=$((DELETED + 1))
+            else
+              echo "::error::Failed to delete release + tag: $tag"
+              FAILED=$((FAILED + 1))
+            fi
+          done <<< "$TAGS"
+
+          if [ "$FAILED" -ne 0 ]; then
+            echo "::error::${FAILED} of ${TAG_COUNT} release(s) could not be deleted (${DELETED} succeeded)."
+            exit 1
+          fi
+
+          echo "Done. Deleted ${DELETED} release(s)."
