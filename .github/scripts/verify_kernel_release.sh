@@ -163,7 +163,10 @@ run_rel() {   # $1 = script, $2 = none|source
     [ -n "$out" ] && out="$kernel_version$out"
   fi
   rm -rf "$d"
-  printf '%s' "$out"
+  # .github/actions/clean-kernel-flags removes the "-dirty" branch from the
+  # script before the build (and commits the result), so the build cannot emit
+  # it. The pristine copy still can, because it was saved before that step.
+  printf '%s' "${out%-dirty}"
 }
 
 BASE_NONE="$(run_rel "$STOCK_SCRIPT" none)"

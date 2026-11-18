@@ -672,6 +672,25 @@ def case_t13(tmp: Path) -> None:
     check_eq("T13e stock_version", out.get("stock_version", ""), built)
 
 
+def case_t13f(tmp: Path) -> None:
+    print("\n--- T13f clean-kernel-flags dropped -dirty after the stock copy was saved")
+    tree = new_tree(tmp, "t13f", kind="legacy", android="android14", kver="6.1",
+                    sublevel="118", kmi="11")
+    run_action(tree, "", True)
+    # The pristine copy predates clean-kernel-flags, which seds "-dirty" out of
+    # the in-tree script; the build therefore cannot emit it.
+    stock = tree.workspace / ".kernel-branding/setlocalversion.stock"
+    text = stock.read_text()
+    stock.write_text(text.replace('echo "$res"', 'echo "$res-dirty"'))
+    sha = sh(["git", "-C", str(tree.dir), "rev-parse", "HEAD"], cwd=tmp).stdout.strip()[:12]
+    built = f"6.1.118-android14-11-g{sha}"
+    fake_build_output(tree, built, cfg_localversion="")
+    rc, out, log = run_verifier(tree)
+    check_eq("T13f exit", str(rc), "0")
+    check_eq("T13f built_version", out.get("built_version", ""), built)
+    check_eq("T13f stock_version has no -dirty", out.get("stock_version", ""), built)
+
+
 def case_static() -> None:
     print("\n--- Static contract of the action")
     run, data = extract_action()
@@ -712,7 +731,7 @@ def main() -> int:
         tmp = Path(td)
         for fn in (case_t1, case_t2, case_t2b, case_t3, case_t4, case_t5,
                    case_t6, case_t7, case_t7c, case_t8, case_t8c, case_t9,
-                   case_t10, case_t11, case_t12, case_t13):
+                   case_t10, case_t11, case_t12, case_t13, case_t13f):
             fn(tmp)
 
     print()
