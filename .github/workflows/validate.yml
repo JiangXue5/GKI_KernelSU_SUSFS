@@ -29,5 +29,8 @@ jobs:
       - name: Validate shell scripts
         run: python3 .github/scripts/validate_shell.py
 
+      - name: Test kernel branding action behaviour
+        run: python3 .github/scripts/test_kernel_branding.py
+
       - name: Validate Python syntax
         run: python3 .github/scripts/validate_python.py

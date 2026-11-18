@@ -33,8 +33,14 @@ outputs:
     description: 'Text appended to the version string (empty when the tree is left untouched)'
     value: ${{ steps.brand.outputs.version_suffix }}
   kmi_preserved:
-    description: 'true when the emitted version string is guaranteed to carry the KMI generation suffix'
+    description: 'true only when keep_kmi was requested AND probing the rewritten script yielded the expected -androidXX-N exactly once'
     value: ${{ steps.brand.outputs.kmi_preserved }}
+  kmi_status:
+    description: 'not-requested | missing-config | already-present | injected | unverified'
+    value: ${{ steps.brand.outputs.kmi_status }}
+  release_preview:
+    description: 'Version string produced by the rewritten script in an isolated probe (informational)'
+    value: ${{ steps.brand.outputs.release_preview }}
 
 runs:
   using: "composite"
@@ -56,15 +62,29 @@ runs:
 
         VERSION="${INPUT_VERSION:-}"
         SUBLEVEL="${INPUT_SUBLEVEL:-}"
-        BRAND="${INPUT_BRAND:-}"
+        BRAND_RAW="${INPUT_BRAND:-}"
         KEEP_KMI="${INPUT_KEEP_KMI:-false}"
 
-        # The brand lands inside a version string and is re-emitted into a
-        # generated shell snippet: drop control characters and shell
-        # metacharacters, trim the edges and turn inner whitespace into '-', so
-        # "My Kernel" cannot split the uname and a quote cannot break the script.
-        BRAND="$(printf '%s' "$BRAND" | tr -d '\000-\037' | tr -d '"`\\$' \
-          | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/[[:space:]]\{1,\}/-/g')"
+        # The brand is embedded both in a generated shell snippet and in the
+        # kernel release string, so only a conservative alphabet survives:
+        # letters, digits and . _ + - . Everything else (quotes, $, backticks,
+        # backslashes, glob characters, control characters, colons, slashes)
+        # is dropped; runs of whitespace collapse to '-'. A brand that survives
+        # as the empty string is treated as "no brand" and reported, never
+        # silently written as a bare '-' suffix.
+        BRAND="$(printf '%s' "$BRAND_RAW" | tr -d '\000-\037' \
+          | sed -e 's/[[:space:]]\{1,\}/-/g' \
+                -e 's/[^A-Za-z0-9._+-]//g' \
+                -e 's/^[-._]*//' \
+                -e 's/[-._]*$//')"
+        if [ -n "$BRAND_RAW" ] && [ -z "$BRAND" ]; then
+          echo "::warning title=brand_name ignored::brand_name contains no characters usable in a kernel version string (allowed: A-Z a-z 0-9 . _ + -); the stock version string is kept."
+        fi
+        if [ "${#BRAND}" -gt 32 ]; then
+          echo "::warning title=brand_name truncated::brand_name is longer than 32 usable characters; truncated to '${BRAND:0:32}'."
+          BRAND="${BRAND:0:32}"
+        fi
+
         case "$KEEP_KMI" in
           true|True|TRUE) KEEP_KMI=true ;;
           *) KEEP_KMI=false ;;
@@ -90,9 +110,19 @@ runs:
             CFG_BRANCH="$(sed -n 's/^[[:space:]]*BRANCH[[:space:]]*=[[:space:]]*\([^#[:space:]]*\).*$/\1/p' "$f" | head -n 1 | tr -d "\"'")"
           fi
         done
-        if [ -n "$CFG_BRANCH" ]; then
-          ANDROID_TOKEN="${CFG_BRANCH%%-*}"
-        fi
+        # A branch of the wrong shape (or a non-numeric generation) must not
+        # end up inside the release string.
+        case "$CFG_KMI" in
+          ''|*[!0-9]*) [ -n "$CFG_KMI" ] && echo "::warning title=KMI_GENERATION ignored::KMI_GENERATION='${CFG_KMI}' is not numeric; treating it as absent." >&2; CFG_KMI="" ;;
+        esac
+        case "$CFG_BRANCH" in
+          android[0-9]*) ANDROID_TOKEN="${CFG_BRANCH%%-*}" ;;
+          *) [ -n "$CFG_BRANCH" ] && echo "::warning title=BRANCH ignored::BRANCH='${CFG_BRANCH}' does not start with androidN; using '${ANDROID_TOKEN}' from the workflow input." >&2 ;;
+        esac
+        case "$ANDROID_TOKEN" in
+          android[0-9]*) ;;
+          *) ANDROID_TOKEN="" ;;
+        esac
 
         # ---------------------------------------------------------------
         # No brand and no KMI request: the stock string is already correct, so
@@ -106,6 +136,8 @@ runs:
             echo "modified=false"
             echo "version_suffix="
             echo "kmi_preserved=false"
+            echo "kmi_status=not-requested"
+            echo "release_preview="
           } >> "$GITHUB_OUTPUT"
           exit 0
         fi
@@ -116,70 +148,12 @@ runs:
           exit 1
         fi
 
-        # Does the tree already put the KMI generation into the string itself?
-        # 5.10/6.1 do (Makefile passes $(BRANCH) $(KMI_GENERATION) straight to
-        # setlocalversion, which prints -android14-11). When it does, the suffix
-        # must NOT be appended again.
-        TREE_ADDS_KMI=false
-        if grep -q 'kmi_generation' "$SCRIPT"; then
-          TREE_ADDS_KMI=true
-        fi
-
-        # KMI suffix the version string must carry, e.g. -android15-8.
-        KMI_SUFFIX=""
-        KMI_PRESERVED=false
-        if [ "$KEEP_KMI" = true ]; then
-          if [ -n "$CFG_KMI" ] && [ -n "$ANDROID_TOKEN" ]; then
-            if [ "$TREE_ADDS_KMI" = true ]; then
-              # The tree emits it; the only risk is our rewrite dropping it,
-              # which the append-only rewrite cannot do.
-              KMI_PRESERVED=true
-            else
-              KMI_SUFFIX="-${ANDROID_TOKEN}-${CFG_KMI}"
-              KMI_PRESERVED=true
-            fi
-          else
-            # Loud, never a silent "kept": without KMI_GENERATION there is no
-            # number to put in the string, and the fallback below cannot keep
-            # what it never had.
-            echo "::warning title=KMI not preserved::keep_kmi=true but KMI_GENERATION could not be read from build.config.common/build.config.constants; the version string keeps whatever the tree produces and no numeric KMI suffix is added."
-            KMI_PRESERVED=false
-          fi
-        fi
-
-        BRAND_SUFFIX=""
-        if [ -n "$BRAND" ]; then
-          BRAND_SUFFIX="-${BRAND}"
-        fi
-
-        # Token inserted before the brand. keep_kmi carries the generation
-        # (-android15-8); with it off the android release token is still kept,
-        # because every release this project shipped carried it and device-side
-        # parsers look for it - dropping it would be a naming regression.
-        # Both are inserted only when the emitted string does not already have
-        # them, so the stock suffix is never duplicated.
-        EXTRA_SUFFIX="$KMI_SUFFIX"
-        if [ -z "$EXTRA_SUFFIX" ] && [ -n "$BRAND_SUFFIX" ] && [ -n "$ANDROID_TOKEN" ]; then
-          EXTRA_SUFFIX="-${ANDROID_TOKEN}"
-        fi
-
-        # keep_kmi asked for, tree already emits it, no brand: the stock string
-        # is already what was asked for, so leave the file alone.
-        if [ -z "$EXTRA_SUFFIX" ] && [ -z "$BRAND_SUFFIX" ]; then
-          echo "nothing to append (KMI already emitted by the tree, no brand): leaving $SCRIPT untouched"
-          {
-            echo "modified=false"
-            echo "version_suffix="
-            echo "kmi_preserved=${KMI_PRESERVED}"
-          } >> "$GITHUB_OUTPUT"
-          exit 0
-        fi
-
-        # Rewrite the value of the LAST echo, whichever shape it has:
-        #   5.10/6.1  -> echo "$res"                          (a suffix; make prepends KERNELVERSION)
-        #   6.6+      -> echo "${KERNELVERSION}...${scm_version}" (the whole release string)
-        # Either way the emitted text is preserved verbatim and only gets the
-        # extra tokens appended, so nothing is dropped or reordered.
+        # ---------------------------------------------------------------
+        # Work out which shape the tree uses. The last echo is the release
+        # producer in every AOSP variant: 6.6/6.12/6.18 echo the complete
+        # KERNELRELEASE (${KERNELVERSION}...), 5.10/6.1 echo a suffix that the
+        # Makefile prefixes with $(KERNELVERSION).
+        # ---------------------------------------------------------------
         LAST_ECHO_NO="$(grep -n '^[[:space:]]*echo[[:space:]]' "$SCRIPT" | tail -n 1 | cut -d: -f1 || true)"
         if [ -z "$LAST_ECHO_NO" ]; then
           echo "::error::no echo statement found in $SCRIPT; refusing to rewrite an unknown version format." >&2
@@ -195,23 +169,221 @@ runs:
             exit 1
             ;;
         esac
+        FORMAT_FULL=false
+        case "$EXPR" in
+          *'${KERNELVERSION}'*) FORMAT_FULL=true ;;
+        esac
+        # A re-run sees `echo "$__wild_rel"` and would lose the knowledge that
+        # this is a full-release tree. The first run records it in a trailing
+        # comment so the probe keeps passing the right arguments.
+        FORMAT_MARKER="$(sed -n 's/^# wild-branding-format=\(full\|suffix\)$/\1/p' "$SCRIPT" | head -n 1)"
+        if [ -n "$FORMAT_MARKER" ]; then
+          if [ "$FORMAT_MARKER" = full ]; then FORMAT_FULL=true; else FORMAT_FULL=false; fi
+        fi
+        FMT_LABEL=suffix
+        if [ "$FORMAT_FULL" = true ]; then FMT_LABEL=full; fi
 
-        # Build the replacement block. Both appends are guarded at run time so a
-        # re-run can never produce -Wild-Wild or a duplicated -android15-8.
+        # ---------------------------------------------------------------
+        # Probe: run the script in an isolated copy and look at what it really
+        # emits. Branding happens before `make defconfig`, so include/config/
+        # auto.conf does not exist yet; the probe synthesises the minimum the
+        # script needs (a git repo + a config that enables the scm suffix) so
+        # the emitted shape matches the build.
+        # ---------------------------------------------------------------
+        PROBE_KVER=""
+        if [ -n "$KERNEL_PART" ] && [ -n "$SUBLEVEL" ]; then
+          PROBE_KVER="${KERNEL_PART}.${SUBLEVEL}"
+        fi
+
+        __probe_raw() {
+          local src="$1" shape="$2" dir out=""
+          dir="$(mktemp -d)"
+          mkdir -p "$dir/include/config"
+          cp "$src" "$dir/setlocalversion"
+          if [ -f include/config/auto.conf ]; then
+            cp include/config/auto.conf "$dir/include/config/auto.conf"
+          else
+            printf '%s\n' 'CONFIG_LOCALVERSION_AUTO=y' > "$dir/include/config/auto.conf"
+          fi
+          for f in localversion*; do
+            [ -e "$f" ] && cp -R "$f" "$dir/" 2>/dev/null || true
+          done
+          (
+            cd "$dir" || exit 1
+            git init -q . >/dev/null 2>&1 || exit 1
+            git -c user.email=probe@branding.invalid -c user.name=probe \
+              -c commit.gpgsign=false commit -q --allow-empty -m probe >/dev/null 2>&1
+          ) >/dev/null 2>&1 || true
+          if [ "$shape" = full ]; then
+            out="$( cd "$dir" && KERNELVERSION="$PROBE_KVER" LOCALVERSION= sh ./setlocalversion . 2>/dev/null )" || out=""
+          elif [ -n "$CFG_KMI" ]; then
+            out="$( cd "$dir" && KERNELVERSION="$PROBE_KVER" LOCALVERSION= sh ./setlocalversion . "${CFG_BRANCH:-$VERSION}" "$CFG_KMI" 2>/dev/null )" || out=""
+          else
+            out="$( cd "$dir" && KERNELVERSION="$PROBE_KVER" LOCALVERSION= sh ./setlocalversion . "${CFG_BRANCH:-$VERSION}" 2>/dev/null )" || out=""
+          fi
+          rm -rf "$dir"
+          printf '%s' "$out"
+        }
+
+        # Try the shape the tree declares first, then the other one: a tree that
+        # was branded by an older copy of this action has no format marker, and
+        # guessing wrong must degrade to "probe failed", never to a wrong claim.
+        __probe() {
+          local src="$1" out=""
+          out="$(__probe_raw "$src" "$FMT_LABEL")"
+          if [ -z "$out" ]; then
+            if [ "$FMT_LABEL" = full ]; then
+              out="$(__probe_raw "$src" suffix)"
+            else
+              out="$(__probe_raw "$src" full)"
+            fi
+          fi
+          printf '%s' "$out"
+        }
+
+        occurrences() {
+          local s="$1" t="$2" n=0
+          while [ -n "$s" ] && [ "${s#*"$t"}" != "$s" ]; do
+            n=$((n + 1))
+            s="${s#*"$t"}"
+          done
+          printf '%s' "$n"
+        }
+
+        # git hashes differ between the two probes (each has its own commit),
+        # so they are normalised before the before/after comparison.
+        normalise() {
+          local s="$1"
+          # Undo exactly what this run changes (not the KMI the tree may
+          # already emit): keep_kmi=false appends -android15, keep_kmi=true
+          # appends -android15-8, merge rewrites -android15 into -android15-8,
+          # the brand is appended last.
+          [ -n "$BRAND_SUFFIX" ] && s="${s//$BRAND_SUFFIX/}"
+          if [ "$KMI_MODE" = merge ]; then
+            s="${s//$KMI_TO/$KMI_FROM}"
+          elif [ -n "$EXTRA_SUFFIX" ]; then
+            s="${s//$EXTRA_SUFFIX/}"
+          fi
+          printf '%s' "$s" | sed -E 's/-g[0-9a-f]{6,}/-gHASH/g'
+        }
+
+        EXPECTED_KMI=""
+        if [ -n "$CFG_KMI" ] && [ -n "$ANDROID_TOKEN" ]; then
+          EXPECTED_KMI="-${ANDROID_TOKEN}-${CFG_KMI}"
+        fi
+        BRAND_SUFFIX=""
+        if [ -n "$BRAND" ]; then
+          BRAND_SUFFIX="-${BRAND}"
+        fi
+
+        STOCK_REL="$(__probe "$SCRIPT")"
+        STOCK_OK=false
+        if [ -n "$STOCK_REL" ]; then STOCK_OK=true; fi
+
+        # ---------------------------------------------------------------
+        # Does the tree itself put the expected KMI generation into the string?
+        # Decision is made from the probe output, not from `grep kmi_generation`:
+        # 5.10/6.1 only print -android14-11 inside `if git rev-parse --verify
+        # HEAD`, and only when scm_version() is reached, so a grep hit can be a
+        # false positive (no git tree, CONFIG_LOCALVERSION_AUTO off, ...).
+        # ---------------------------------------------------------------
+        TREE_ADDS_KMI=false
+        if [ "$STOCK_OK" = true ] && [ -n "$EXPECTED_KMI" ] \
+           && [ "$(occurrences "$STOCK_REL" "$EXPECTED_KMI")" -ge 1 ]; then
+          TREE_ADDS_KMI=true
+        elif [ "$STOCK_OK" != true ] && grep -q 'kmi_generation' "$SCRIPT"; then
+          # Probe failed and the script is the legacy shape: assume the tree
+          # appends it itself, otherwise a real build would get it twice.
+          # kmi_preserved stays false because nothing was confirmed.
+          TREE_ADDS_KMI=true
+        fi
+
+        KMI_SUFFIX=""
+        KMI_MODE=""
+        KMI_FROM=""
+        KMI_TO=""
+        KMI_STATUS="not-requested"
+        if [ "$KEEP_KMI" = true ]; then
+          if [ -z "$EXPECTED_KMI" ]; then
+            echo "::warning title=KMI not preserved::keep_kmi=true but a numeric KMI_GENERATION could not be read from build.config.common/build.config.constants; the version string keeps whatever the tree produces and no numeric KMI suffix is added."
+            KMI_STATUS="missing-config"
+          elif [ "$TREE_ADDS_KMI" = true ]; then
+            KMI_STATUS="already-present"
+          elif [ "$STOCK_OK" = true ] \
+               && [ "$(occurrences "$STOCK_REL" "-${ANDROID_TOKEN}")" -ge 1 ]; then
+            # The tree emits the android release token but not the generation
+            # (or an earlier run appended -android15 only). Completing the pair
+            # in place keeps one token: -android15 -> -android15-8.
+            KMI_MODE=merge
+            KMI_FROM="-${ANDROID_TOKEN}"
+            KMI_TO="$EXPECTED_KMI"
+            KMI_STATUS="extended"
+          else
+            KMI_SUFFIX="$EXPECTED_KMI"
+            KMI_STATUS="injected"
+          fi
+        fi
+
+        # Token inserted before the brand. keep_kmi carries the generation
+        # (-android15-8); with it off the android release token is still kept,
+        # because every release this project shipped carried it and device-side
+        # parsers look for it - dropping it would be a naming regression.
+        # Both are inserted only when the emitted string does not already have
+        # them, so the stock suffix is never duplicated.
+        EXTRA_SUFFIX="$KMI_SUFFIX"
+        if [ -z "$EXTRA_SUFFIX" ] && [ -n "$BRAND_SUFFIX" ] && [ -n "$ANDROID_TOKEN" ]; then
+          if [ "$STOCK_OK" = true ] && [ "$(occurrences "$STOCK_REL" "-${ANDROID_TOKEN}")" -ge 1 ]; then
+            EXTRA_SUFFIX=""
+          else
+            EXTRA_SUFFIX="-${ANDROID_TOKEN}"
+          fi
+        fi
+
+        # keep_kmi asked for, tree already emits it, no brand: the stock string
+        # is already what was asked for, so leave the file alone.
+        if [ -z "$EXTRA_SUFFIX" ] && [ -z "$BRAND_SUFFIX" ] && [ -z "$KMI_MODE" ]; then
+          echo "nothing to append (KMI already emitted by the tree, no brand): leaving $SCRIPT untouched"
+          KMI_PRESERVED=false
+          if [ "$KMI_STATUS" = "already-present" ] && [ "$STOCK_OK" = true ] \
+             && [ "$(occurrences "$STOCK_REL" "$EXPECTED_KMI")" -eq 1 ]; then
+            KMI_PRESERVED=true
+          elif [ "$KMI_STATUS" = "already-present" ]; then
+            echo "::warning title=KMI not verified::the tree is expected to emit ${EXPECTED_KMI} but it could not be observed in a probe; reporting kmi_preserved=false."
+            KMI_STATUS="unverified"
+          fi
+          {
+            echo "modified=false"
+            echo "version_suffix="
+            echo "kmi_preserved=${KMI_PRESERVED}"
+            echo "kmi_status=${KMI_STATUS}"
+            echo "release_preview=${STOCK_REL}"
+          } >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        # Rewrite the value of the LAST echo, whichever shape it has:
+        #   5.10/6.1  -> echo "$res"                          (a suffix; make prepends KERNELVERSION)
+        #   6.6+      -> echo "${KERNELVERSION}...${scm_version}" (the whole release string)
+        # Either way the emitted text is preserved verbatim and only gets the
+        # extra tokens appended, so nothing is dropped or reordered.
+        #
+        # Both appends are guarded at run time so a re-run can never produce
+        # -Wild-Wild or a duplicated -android15-8.
         #
         # Kleaf trees emit the whole release string, so a KMI that the tree does
         # not produce itself belongs right after ${KERNELVERSION} (6.6.77-android15-8-4k-g...),
         # not at the very end where it would sit behind the git description.
         # Legacy trees emit a suffix that make prefixes with KERNELVERSION, so
         # appending keeps the same layout.
-        FORMAT_FULL=false
-        case "$EXPR" in
-          *'${KERNELVERSION}'*) FORMAT_FULL=true ;;
-        esac
         BLOCK="$(mktemp)"
         {
           printf '%s\n' '__wild_rel="'"${EXPR}"'"'
-          if [ -n "$EXTRA_SUFFIX" ]; then
+          if [ "$KMI_MODE" = merge ]; then
+            printf '%s\n' "case \"\$__wild_rel\" in"
+            printf '%s\n' "  *\"${KMI_TO}\"*) ;;"
+            printf '%s\n' "  *\"${KMI_FROM}\"*) __wild_rel=\"\$(printf '%s' \"\$__wild_rel\" | sed 's/${KMI_FROM}/${KMI_TO}/')\" ;;"
+            printf '%s\n' "esac"
+          elif [ -n "$EXTRA_SUFFIX" ]; then
             if [ "$FORMAT_FULL" = true ]; then
               printf '%s\n' "case \"\$__wild_rel\" in"
               printf '%s\n' "  *\"${EXTRA_SUFFIX}\"*) ;;"
@@ -234,6 +406,9 @@ runs:
         ' "$SCRIPT" > "$SCRIPT.new"
         mv "$SCRIPT.new" "$SCRIPT"
         rm -f "$BLOCK"
+        if [ -z "$FORMAT_MARKER" ]; then
+          printf '\n# wild-branding-format=%s\n' "$FMT_LABEL" >> "$SCRIPT"
+        fi
         chmod +x "$SCRIPT"
 
         # A broken script would fail the build hours later, in the middle of the
@@ -243,18 +418,58 @@ runs:
           exit 1
         fi
 
+        # ---------------------------------------------------------------
+        # Verify by running the rewritten script, not by inspecting it:
+        # the release string must contain the expected KMI exactly once and
+        # must be identical to the stock string once the appended tokens are
+        # removed (no lost sublevel / page size / git description).
+        # ---------------------------------------------------------------
+        AFTER_REL="$(__probe "$SCRIPT")"
+        KMI_PRESERVED=false
+        if [ "$KEEP_KMI" = true ] && [ -n "$EXPECTED_KMI" ]; then
+          if [ -z "$AFTER_REL" ]; then
+            echo "::warning title=KMI not verified::the rewritten $SCRIPT could not be executed in a probe; reporting kmi_preserved=false."
+            KMI_STATUS="unverified"
+          else
+            KMI_COUNT="$(occurrences "$AFTER_REL" "$EXPECTED_KMI")"
+            if [ "$KMI_COUNT" -eq 1 ]; then
+              KMI_PRESERVED=true
+            else
+              echo "::warning title=KMI not verified::expected exactly one '${EXPECTED_KMI}' in the emitted version string but found ${KMI_COUNT} (${AFTER_REL})."
+              KMI_STATUS="unverified"
+            fi
+          fi
+        fi
+
+        if [ "$STOCK_OK" = true ] && [ -n "$AFTER_REL" ]; then
+          if [ "$(normalise "$STOCK_REL")" != "$(normalise "$AFTER_REL")" ]; then
+            echo "::error::rewritten $SCRIPT changes the version string beyond the appended tokens: stock='${STOCK_REL}' new='${AFTER_REL}'" >&2
+            exit 1
+          fi
+        fi
+
         echo "Kernel $VERSION (kernel ${KERNEL_PART}, sublevel ${SUBLEVEL:-?})"
         echo "  brand       : ${BRAND:-<none>}"
         echo "  keep_kmi    : ${KEEP_KMI}"
-        echo "  inserted    : ${EXTRA_SUFFIX:-<none>}"
-        echo "  appended    : ${EXTRA_SUFFIX}${BRAND_SUFFIX}"
+        echo "  kmi edit    : $( [ "$KMI_MODE" = merge ] && printf '%s -> %s' "$KMI_FROM" "$KMI_TO" || printf '%s' "${EXTRA_SUFFIX:-<none>}" )"
+        echo "  appended    : ${BRAND_SUFFIX:-<none>}"
+        echo "  kmi_status  : ${KMI_STATUS} (preserved=${KMI_PRESERVED})"
+        echo "  stock probe : ${STOCK_REL:-<probe failed>}"
+        echo "  new probe   : ${AFTER_REL:-<probe failed>}"
         echo "  version tail:"
         sed -n "$((LAST_ECHO_NO - 1)),\$p" "$SCRIPT" | sed 's/^/    /'
 
+        VERSION_SUFFIX="${EXTRA_SUFFIX}${BRAND_SUFFIX}"
+        if [ "$KMI_MODE" = merge ]; then
+          VERSION_SUFFIX="${BRAND_SUFFIX}"
+        fi
+
         {
           echo "modified=true"
-          echo "version_suffix=${EXTRA_SUFFIX}${BRAND_SUFFIX}"
+          echo "version_suffix=${VERSION_SUFFIX}"
           echo "kmi_preserved=${KMI_PRESERVED}"
+          echo "kmi_status=${KMI_STATUS}"
+          echo "release_preview=${AFTER_REL}"
         } >> "$GITHUB_OUTPUT"
 
         if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
@@ -265,7 +480,10 @@ runs:
             echo "| --- | --- |"
             echo "| Brand | \`${BRAND:-<none>}\` |"
             echo "| keep_kmi | \`${KEEP_KMI}\` |"
-            echo "| Appended to version | \`${EXTRA_SUFFIX}${BRAND_SUFFIX}\` |"
+            echo "| Appended to version | \`${VERSION_SUFFIX:-<none>}\` |"
+            echo "| KMI status | \`${KMI_STATUS}\` |"
             echo "| KMI preserved | \`${KMI_PRESERVED}\` |"
+            echo "| Stock probe | \`${STOCK_REL:-<probe failed>}\` |"
+            echo "| Rewritten probe | \`${AFTER_REL:-<probe failed>}\` |"
           } >> "$GITHUB_STEP_SUMMARY"
         fi
