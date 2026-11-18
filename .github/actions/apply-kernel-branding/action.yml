@@ -39,7 +39,12 @@ outputs:
     description: 'not-requested | missing-config | already-present | injected | unverified'
     value: ${{ steps.brand.outputs.kmi_status }}
   release_preview:
-    description: 'Version string produced by the rewritten script in an isolated probe (informational)'
+    description: >-
+      Version string produced by the rewritten script in an isolated probe.
+      Informational only: the probe runs before any config exists (and, on the
+      Kleaf lanes, without the git metadata the real build never sees either),
+      so this is the shape of the string, not a prediction of the built one.
+      The built string is checked by .github/actions/verify-kernel-release.
     value: ${{ steps.brand.outputs.release_preview }}
 
 runs:
@@ -90,9 +95,61 @@ runs:
           *) KEEP_KMI=false ;;
         esac
 
+        SCRIPT=scripts/setlocalversion
+
+        # The post-build check (.github/actions/verify-kernel-release) needs the
+        # untouched script to compute the stock release string from the real
+        # build config, plus the tokens this run inserted. Everything it needs
+        # is written here; the stock copy is never overwritten with a branded
+        # script, otherwise a second run would take its own output as baseline.
+        STATE_DIR="${GITHUB_WORKSPACE:-$(cd ../.. 2>/dev/null && pwd || printf '%s' "$PWD")}/.kernel-branding"
+
+        __save_stock_script() {
+          [ -f "$SCRIPT" ] || return 0
+          mkdir -p "$STATE_DIR" 2>/dev/null || return 0
+          if grep -q '__wild_rel\|wild-branding-format=' "$SCRIPT" 2>/dev/null; then
+            return 0   # already branded: keep the pristine copy from the first run
+          fi
+          cp "$SCRIPT" "$STATE_DIR/setlocalversion.stock" 2>/dev/null || true
+        }
+
+        __write_state() {   # $1 = modified (true|false)
+          mkdir -p "$STATE_DIR" 2>/dev/null || return 0
+          # The early exit leaves before the format is parsed; the verifier needs
+          # it to know whether the script emits a full release or a suffix.
+          local fmt="${FMT_LABEL:-}"
+          if [ -z "$fmt" ]; then
+            fmt="$(sed -n 's/^# wild-branding-format=\(full\|suffix\)$/\1/p' "$SCRIPT" 2>/dev/null | head -n 1)"
+            if [ -z "$fmt" ] && [ -f "$SCRIPT" ]; then
+              if grep -q '\${KERNELVERSION}' "$SCRIPT"; then fmt=full; else fmt=suffix; fi
+            fi
+          fi
+          {
+            printf 'format=%s\n' "$fmt"
+            printf 'kernel_version=%s\n' "${PROBE_KVER:-}"
+            printf 'branch=%s\n' "${CFG_BRANCH:-${VERSION:-}}"
+            printf 'kmi_generation=%s\n' "${CFG_KMI:-}"
+            printf 'kmi_suffix=%s\n' "${KMI_SUFFIX:-}"
+            printf 'extra_suffix=%s\n' "${EXTRA_SUFFIX:-}"
+            printf 'expected_kmi=%s\n' "${EXPECTED_KMI:-}"
+            printf 'kmi_mode=%s\n' "${KMI_MODE:-}"
+            printf 'kmi_from=%s\n' "${KMI_FROM:-}"
+            printf 'kmi_to=%s\n' "${KMI_TO:-}"
+            printf 'brand_suffix=%s\n' "${BRAND_SUFFIX:-}"
+            printf 'kmi_status=%s\n' "${KMI_STATUS:-}"
+            printf 'keep_kmi=%s\n' "$KEEP_KMI"
+            printf 'modified=%s\n' "$1"
+          } > "$STATE_DIR/state.env" 2>/dev/null || true
+        }
+
         # android15-6.6 -> android15
         ANDROID_TOKEN="${VERSION%%-*}"
         KERNEL_PART="${VERSION#*-}"
+
+        PROBE_KVER=""
+        if [ -n "$KERNEL_PART" ] && [ -n "$SUBLEVEL" ]; then
+          PROBE_KVER="${KERNEL_PART}.${SUBLEVEL}"
+        fi
 
         # KMI generation + branch come from the tree, not from the workflow
         # inputs: build.config.common sources build.config.constants, and either
@@ -132,6 +189,8 @@ runs:
         # ---------------------------------------------------------------
         if [ -z "$BRAND" ] && [ "$KEEP_KMI" != true ]; then
           echo "brand_name is empty and keep_kmi is off: leaving scripts/setlocalversion untouched (stock version string)"
+          __save_stock_script
+          __write_state false
           {
             echo "modified=false"
             echo "version_suffix="
@@ -142,11 +201,12 @@ runs:
           exit 0
         fi
 
-        SCRIPT=scripts/setlocalversion
         if [ ! -f "$SCRIPT" ]; then
           echo "::error::$PWD/$SCRIPT is missing; cannot apply branding." >&2
           exit 1
         fi
+
+        __save_stock_script
 
         # ---------------------------------------------------------------
         # Work out which shape the tree uses. The last echo is the release
@@ -187,16 +247,25 @@ runs:
         # Probe: run the script in an isolated copy and look at what it really
         # emits. Branding happens before `make defconfig`, so include/config/
         # auto.conf does not exist yet; the probe synthesises the minimum the
-        # script needs (a git repo + a config that enables the scm suffix) so
-        # the emitted shape matches the build.
+        # script needs.
+        #
+        # Git visibility is not the same on both lanes, and pretending
+        # otherwise is how a previous version of this action came to advertise
+        # "-g<hash>" for builds that can never produce it:
+        #   * 5.10/6.1 (build/build.sh) run make inside the real source tree,
+        #     so scripts/setlocalversion does see .git;
+        #   * 6.6+ (Kleaf) builds in a sandbox without .git and only stamps the
+        #     SCM version when --config=stamp is set. This workflow uses
+        #     --config=fast, so the release string carries no -g<hash> at all.
+        # The probe therefore mirrors the lane instead of always inventing a
+        # git repo. Nothing depends on the hash anyway: the before/after
+        # comparison only looks at what this action appends.
         # ---------------------------------------------------------------
-        PROBE_KVER=""
-        if [ -n "$KERNEL_PART" ] && [ -n "$SUBLEVEL" ]; then
-          PROBE_KVER="${KERNEL_PART}.${SUBLEVEL}"
-        fi
+        PROBE_GIT=false
+        if [ "$FORMAT_FULL" != true ]; then PROBE_GIT=true; fi
 
         __probe_raw() {
-          local src="$1" shape="$2" dir out=""
+          local src="$1" shape="$2" with_git="$3" dir out=""
           dir="$(mktemp -d)"
           mkdir -p "$dir/include/config"
           cp "$src" "$dir/setlocalversion"
@@ -208,12 +277,14 @@ runs:
           for f in localversion*; do
             [ -e "$f" ] && cp -R "$f" "$dir/" 2>/dev/null || true
           done
-          (
-            cd "$dir" || exit 1
-            git init -q . >/dev/null 2>&1 || exit 1
-            git -c user.email=probe@branding.invalid -c user.name=probe \
-              -c commit.gpgsign=false commit -q --allow-empty -m probe >/dev/null 2>&1
-          ) >/dev/null 2>&1 || true
+          if [ "$with_git" = true ]; then
+            (
+              cd "$dir" || exit 1
+              git init -q . >/dev/null 2>&1 || exit 1
+              git -c user.email=probe@branding.invalid -c user.name=probe \
+                -c commit.gpgsign=false commit -q --allow-empty -m probe >/dev/null 2>&1
+            ) >/dev/null 2>&1 || true
+          fi
           if [ "$shape" = full ]; then
             out="$( cd "$dir" && KERNELVERSION="$PROBE_KVER" LOCALVERSION= sh ./setlocalversion . 2>/dev/null )" || out=""
           elif [ -n "$CFG_KMI" ]; then
@@ -228,14 +299,15 @@ runs:
         # Try the shape the tree declares first, then the other one: a tree that
         # was branded by an older copy of this action has no format marker, and
         # guessing wrong must degrade to "probe failed", never to a wrong claim.
+        # Git visibility stays what the declared lane implies for both attempts.
         __probe() {
           local src="$1" out=""
-          out="$(__probe_raw "$src" "$FMT_LABEL")"
+          out="$(__probe_raw "$src" "$FMT_LABEL" "$PROBE_GIT")"
           if [ -z "$out" ]; then
             if [ "$FMT_LABEL" = full ]; then
-              out="$(__probe_raw "$src" suffix)"
+              out="$(__probe_raw "$src" suffix "$PROBE_GIT")"
             else
-              out="$(__probe_raw "$src" full)"
+              out="$(__probe_raw "$src" full "$PROBE_GIT")"
             fi
           fi
           printf '%s' "$out"
@@ -343,6 +415,7 @@ runs:
         # is already what was asked for, so leave the file alone.
         if [ -z "$EXTRA_SUFFIX" ] && [ -z "$BRAND_SUFFIX" ] && [ -z "$KMI_MODE" ]; then
           echo "nothing to append (KMI already emitted by the tree, no brand): leaving $SCRIPT untouched"
+          echo "  probe mode  : ${FMT_LABEL} shape, git visible=${PROBE_GIT} (mirrors the build lane)"
           KMI_PRESERVED=false
           if [ "$KMI_STATUS" = "already-present" ] && [ "$STOCK_OK" = true ] \
              && [ "$(occurrences "$STOCK_REL" "$EXPECTED_KMI")" -eq 1 ]; then
@@ -358,6 +431,7 @@ runs:
             echo "kmi_status=${KMI_STATUS}"
             echo "release_preview=${STOCK_REL}"
           } >> "$GITHUB_OUTPUT"
+          __write_state false
           exit 0
         fi
 
@@ -454,8 +528,9 @@ runs:
         echo "  kmi edit    : $( [ "$KMI_MODE" = merge ] && printf '%s -> %s' "$KMI_FROM" "$KMI_TO" || printf '%s' "${EXTRA_SUFFIX:-<none>}" )"
         echo "  appended    : ${BRAND_SUFFIX:-<none>}"
         echo "  kmi_status  : ${KMI_STATUS} (preserved=${KMI_PRESERVED})"
-        echo "  stock probe : ${STOCK_REL:-<probe failed>}"
-        echo "  new probe   : ${AFTER_REL:-<probe failed>}"
+        echo "  probe mode  : ${FMT_LABEL} shape, git visible=${PROBE_GIT} (mirrors the build lane)"
+        echo "  stock probe : ${STOCK_REL:-<probe failed>}   <- shape only, not the built version"
+        echo "  new probe   : ${AFTER_REL:-<probe failed>}   <- shape only, not the built version"
         echo "  version tail:"
         sed -n "$((LAST_ECHO_NO - 1)),\$p" "$SCRIPT" | sed 's/^/    /'
 
@@ -471,6 +546,7 @@ runs:
           echo "kmi_status=${KMI_STATUS}"
           echo "release_preview=${AFTER_REL}"
         } >> "$GITHUB_OUTPUT"
+        __write_state true
 
         if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
           {

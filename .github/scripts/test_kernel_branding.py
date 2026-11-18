@@ -228,6 +228,11 @@ class Tree:
         return self.dir / "scripts" / "setlocalversion"
 
     @property
+    def workspace(self) -> Path:
+        # <workspace>/kernel/common
+        return self.dir.parents[1]
+
+    @property
     def kernel_version(self) -> str:
         return f"{self.kver}.{self.sublevel}"
 
@@ -245,6 +250,7 @@ def run_action(tree: Tree, brand: str, keep_kmi: bool) -> tuple[dict, str, str]:
         "INPUT_KEEP_KMI": "true" if keep_kmi else "false",
         "GITHUB_OUTPUT": str(out_file),
         "GITHUB_STEP_SUMMARY": str(summ_file),
+        "GITHUB_WORKSPACE": str(tree.workspace),
     }
     proc = sh(["bash", "-c", run], cwd=tree.dir, env=env)
     outputs: dict[str, str] = {}
@@ -255,9 +261,18 @@ def run_action(tree: Tree, brand: str, keep_kmi: bool) -> tuple[dict, str, str]:
     return outputs, proc.stdout, proc.stderr
 
 
-def probe_release(tree: Tree, script: Path | None = None) -> str:
-    """Run a setlocalversion the way the build does, in an isolated copy."""
+def probe_release(tree: Tree, script: Path | None = None,
+                  with_git: bool | None = None) -> str:
+    """Run a setlocalversion the way the build does, in an isolated copy.
+
+    `with_git` mirrors the lane, exactly like the action's own probe: the
+    Kleaf lanes build in a sandbox without .git (and do not stamp the SCM
+    version with --config=fast), while build/build.sh lanes run make in the
+    checked-out tree, where .git is visible.
+    """
     script = script or tree.script
+    if with_git is None:
+        with_git = tree.kind != "kleaf"
     tmp = Path(tempfile.mkdtemp(prefix="probe-"))
     try:
         (tmp / "include" / "config").mkdir(parents=True)
@@ -267,9 +282,10 @@ def probe_release(tree: Tree, script: Path | None = None) -> str:
         if (tree.dir / "include/config/auto.conf").exists():
             cfg = (tree.dir / "include/config/auto.conf").read_text()
         (tmp / "include" / "config" / "auto.conf").write_text(cfg)
-        sh(["git", "init", "-q", "."], cwd=tmp)
-        sh(["git", "-c", "user.email=t@t", "-c", "user.name=t",
-            "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "p"], cwd=tmp)
+        if with_git:
+            sh(["git", "init", "-q", "."], cwd=tmp)
+            sh(["git", "-c", "user.email=t@t", "-c", "user.name=t",
+                "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "p"], cwd=tmp)
 
         args = [".", tree.branch]
         if tree.kind == "legacy":
@@ -305,8 +321,7 @@ def case_t1(tmp: Path) -> None:
     check_eq("T1 modified", out.get("modified", ""), "false")
     check_eq("T1 kmi_preserved", out.get("kmi_preserved", ""), "false")
     check_eq("T1 kmi_status", out.get("kmi_status", ""), "not-requested")
-    check_eq("T1 release string == stock", probe_release(tree),
-             f"6.6.162-g" + probe_release(tree).split("-g", 1)[-1])
+    check_eq("T1 release string == stock", probe_release(tree), "6.6.162")
     check("T1 no brand token", "Wild" not in probe_release(tree))
 
 
@@ -317,7 +332,8 @@ def case_t2(tmp: Path) -> None:
     rel = probe_release(tree)
     check_eq("T2 kmi_preserved", out.get("kmi_preserved", ""), "true")
     check_eq("T2 kmi_status", out.get("kmi_status", ""), "injected")
-    check_re("T2 KMI directly after KERNELVERSION", rel, r"^6\.6\.162-android15-8-g[0-9a-f]{6,}$")
+    check_re("T2 KMI directly after KERNELVERSION", rel, r"^6\.6\.162-android15-8$")
+    check_not_re("T2 no fabricated git hash (Kleaf --config=fast never stamps)", rel, r"-g[0-9a-f]")
     check_eq("T2 KMI occurs once", str(rel.count("-android15-8")), "1")
     check("T2 no brand added", not re.search(r"Wild|Google|Custom", rel))
 
@@ -328,8 +344,7 @@ def case_t2b(tmp: Path) -> None:
     out, _, _ = run_action(tree, "", True)
     rel = probe_release(tree)
     check_eq("T2b kmi_preserved", out.get("kmi_preserved", ""), "true")
-    check_re("T2b page size kept, KMI before it", rel,
-             r"^6\.6\.162-android15-8-4k-g[0-9a-f]{6,}$")
+    check_eq("T2b page size kept, KMI before it", rel, "6.6.162-android15-8-4k")
     check_eq("T2b KMI once", str(rel.count("-android15-8")), "1")
     check_eq("T2b page size once", str(rel.count("-4k")), "1")
 
@@ -340,8 +355,8 @@ def case_t3(tmp: Path) -> None:
     out, _, _ = run_action(tree, "Wild", False)
     rel = probe_release(tree)
     check_re("T3 ends with -Wild", rel, r"-Wild$")
-    check_re("T3 keeps sublevel + git description", rel,
-             r"^6\.6\.162-android15-g[0-9a-f]{6,}-Wild$")
+    check_re("T3 keeps sublevel, android token then brand", rel,
+             r"^6\.6\.162-android15-Wild$")
     check_eq("T3 android token only once", str(rel.count("-android15")), "1")
     check_eq("T3 no KMI number added", "0", str(rel.count("-android15-8")))
     check_eq("T3 kmi_preserved", out.get("kmi_preserved", ""), "false")
@@ -354,7 +369,7 @@ def case_t4(tmp: Path) -> None:
     out, _, _ = run_action(tree, "Wild", True)
     rel = probe_release(tree)
     check_eq("T4 kmi_preserved", out.get("kmi_preserved", ""), "true")
-    check_re("T4 KMI then brand", rel, r"^6\.6\.162-android15-8-g[0-9a-f]{6,}-Wild$")
+    check_re("T4 KMI then brand", rel, r"^6\.6\.162-android15-8-Wild$")
     check_eq("T4 KMI once", str(rel.count("-android15-8")), "1")
     check_not_re("T4 no -Wild-Wild", rel, r"Wild-Wild")
 
@@ -365,14 +380,14 @@ def case_t5(tmp: Path) -> None:
     out, _, _ = run_action(tree, "Custom", True)
     rel = probe_release(tree)
     check_eq("T5 kmi_preserved", out.get("kmi_preserved", ""), "true")
-    check_re("T5 KMI then custom brand", rel, r"^6\.6\.162-android15-8-g[0-9a-f]{6,}-Custom$")
+    check_re("T5 KMI then custom brand", rel, r"^6\.6\.162-android15-8-Custom$")
     check_not_re("T5 no Wild", rel, r"Wild")
 
     print("\n--- T5b brand=Custom  keep_kmi=false (Android 15 / 6.6)")
     tree = new_tree(tmp, "t5b", kind="kleaf")
     run_action(tree, "Custom", False)
     rel = probe_release(tree)
-    check_re("T5b android token + brand", rel, r"^6\.6\.162-android15-g[0-9a-f]{6,}-Custom$")
+    check_re("T5b android token + brand", rel, r"^6\.6\.162-android15-Custom$")
     check_eq("T5b android token once", str(rel.count("-android15")), "1")
 
 
@@ -410,7 +425,7 @@ def case_t7(tmp: Path) -> None:
     check_eq("T7b kmi_status", out.get("kmi_status", ""), "already-present")
     check_eq("T7b kmi_preserved", out.get("kmi_preserved", ""), "true")
     check_re("T7b brand appended after stock KMI", rel,
-             r"^6\.6\.162-android15-8-g[0-9a-f]{6,}-Wild$")
+             r"^6\.6\.162-android15-8-Wild$")
     check_eq("T7b KMI once", str(rel.count("-android15-8")), "1")
 
 
@@ -421,7 +436,7 @@ def case_t7c(tmp: Path) -> None:
     run_action(tree, "Wild", False)
     rel = probe_release(tree)
     check_re("T7c brand only, stock tokens untouched", rel,
-             r"^6\.6\.162-android15-8-4k-g[0-9a-f]{6,}-Wild$")
+             r"^6\.6\.162-android15-8-4k-Wild$")
     check_eq("T7c android token count", str(rel.count("-android15")), "1")
     check_eq("T7c page size count", str(rel.count("-4k")), "1")
 
@@ -459,7 +474,7 @@ def case_t8c(tmp: Path) -> None:
     out, _, _ = run_action(tree, "Wild", True)
     rel = probe_release(tree)
     check_re("T8c android token completed, not duplicated", rel,
-             r"^6\.6\.162-android15-8-g[0-9a-f]{6,}-Wild$")
+             r"^6\.6\.162-android15-8-Wild$")
     check_eq("T8c android token count", str(rel.count("-android15")), "1")
     check_eq("T8c kmi_status", out.get("kmi_status", ""), "extended")
     check_eq("T8c kmi_preserved", out.get("kmi_preserved", ""), "true")
@@ -471,8 +486,8 @@ def case_t9(tmp: Path) -> None:
     cases = [
         ("legacy", "android12", "5.10", "101", "9", r"^5\.10\.101-android12-9-g[0-9a-f]{6,}-Wild$"),
         ("legacy", "android14", "6.1", "118", "11", r"^6\.1\.118-android14-11-g[0-9a-f]{6,}-Wild$"),
-        ("kleaf", "android15", "6.6", "162", "8", r"^6\.6\.162-android15-8-g[0-9a-f]{6,}-Wild$"),
-        ("kleaf", "android16", "6.12", "30", "12", r"^6\.12\.30-android16-12-g[0-9a-f]{6,}-Wild$"),
+        ("kleaf", "android15", "6.6", "162", "8", r"^6\.6\.162-android15-8-Wild$"),
+        ("kleaf", "android16", "6.12", "30", "12", r"^6\.12\.30-android16-12-Wild$"),
     ]
     for i, (kind, android, kver, sublevel, kmi, pattern) in enumerate(cases):
         tree = new_tree(tmp, f"t9-{i}", kind=kind, android=android, kver=kver,
@@ -498,7 +513,7 @@ def case_t10(tmp: Path) -> None:
     check("T10b payload not executed", not marker.exists())
     rel = probe_release(tree)
     check_re("T10b survives as a legal version string", rel,
-             r"^6\.6\.162-android15-g[0-9a-f]{6,}-[A-Za-z0-9._+-]*$")
+             r"^6\.6\.162-android15-[A-Za-z0-9._+-]*$")
     check_not_re("T10b no shell metacharacters", rel, r'[^A-Za-z0-9._+-]')
 
     tree = new_tree(tmp, "t10c", kind="kleaf")
@@ -516,6 +531,147 @@ def case_t10(tmp: Path) -> None:
     check_eq("T10d modified", out.get("modified", ""), "false")
 
 
+def case_t11(tmp: Path) -> None:
+    print("\n--- T11 Kleaf lane: the probe must not invent a git suffix")
+    tree = new_tree(tmp, "t11", kind="kleaf", auto_conf=True,
+                    cfg_localversion="-4k")
+    out, stdout, _ = run_action(tree, "", True)
+    rel = probe_release(tree)
+    # --config=fast does not stamp the SCM version, so a real Kleaf build of a
+    # clean tree never carries -g<hash>. Advertising one was the defect that
+    # made a correct build look like it had lost a suffix.
+    check_eq("T11 probe has no fabricated git hash", rel, "6.6.162-android15-8-4k")
+    check_not_re("T11 no -g token", rel, r"-g[0-9a-f]{6,}")
+    check_eq("T11 preview equals the shapless shape", out.get("release_preview", ""), rel)
+    check_re("T11 action reports git invisibility", stdout, r"git visible=false")
+    check_eq("T11 kmi_preserved", out.get("kmi_preserved", ""), "true")
+
+    print("\n--- T11b legacy lane keeps the git description it really has")
+    tree = new_tree(tmp, "t11b", kind="legacy", android="android14", kver="6.1",
+                    sublevel="118", kmi="11")
+    out, stdout, _ = run_action(tree, "", True)
+    rel = probe_release(tree)
+    check_re("T11b -g hash kept (build.sh sees .git)", rel,
+             r"^6\.1\.118-android14-11-g[0-9a-f]{6,}$")
+    check_re("T11b action reports git visibility", stdout, r"git visible=true")
+
+
+def case_t12(tmp: Path) -> None:
+    print("\n--- T12 the reported real shape: 6.6.143-android15-8-4k")
+    tree = new_tree(tmp, "t12", kind="kleaf", sublevel="143", auto_conf=True,
+                    cfg_localversion="-4k")
+    out, _, _ = run_action(tree, "", True)
+    rel = probe_release(tree)
+    check_eq("T12 exact expected string", rel, "6.6.143-android15-8-4k")
+    # The original suffix must be the stock suffix, byte for byte, behind the
+    # inserted token: that is the actual acceptance criterion.
+    stock = "6.6.143-4k"
+    check_eq("T12 stock suffix preserved verbatim",
+             "6.6.143" + rel.split("-android15-8", 1)[1], stock)
+    check_eq("T12 KMI once", str(rel.count("-android15-8")), "1")
+    check_eq("T12 page-size token once", str(rel.count("-4k")), "1")
+    check_eq("T12 kmi_status", out.get("kmi_status", ""), "injected")
+
+
+# --------------------------------------------------------------------------
+# verify_kernel_release.sh: post-build proof against the real artifact
+# --------------------------------------------------------------------------
+VERIFIER = REPO / ".github/scripts/verify_kernel_release.sh"
+
+
+def fake_build_output(tree: Tree, image_version: str,
+                      cfg_localversion: str = "-4k") -> None:
+    """Materialise what the build leaves behind: .config and the Image."""
+    out = tree.workspace / "kernel/bazel-bin/common/kernel_aarch64_config/out_dir"
+    out.mkdir(parents=True, exist_ok=True)
+    (out / ".config").write_text(
+        "# Linux/arm64 %s Kernel Configuration\n"
+        "CONFIG_LOCALVERSION=%s\n"
+        "CONFIG_LOCALVERSION_AUTO=y\n" % (tree.kernel_version, cfg_localversion))
+    img_dir = tree.workspace / "kernel/bazel-bin/common/kernel_aarch64"
+    img_dir.mkdir(parents=True, exist_ok=True)
+    (img_dir / "Image").write_text(
+        "padding\nLinux version %s (kleaf@build-host) #1 SMP PREEMPT\n" % image_version)
+
+
+def run_verifier(tree: Tree) -> tuple[int, dict, str]:
+    out_file = tree.workspace / "verify.out"
+    summ_file = tree.workspace / "verify.md"
+    out_file.write_text("")
+    summ_file.write_text("")
+    env = {
+        "GITHUB_WORKSPACE": str(tree.workspace),
+        "GITHUB_OUTPUT": str(out_file),
+        "GITHUB_STEP_SUMMARY": str(summ_file),
+    }
+    proc = sh(["bash", str(VERIFIER)], cwd=tree.workspace, env=env)
+    outputs: dict[str, str] = {}
+    for line in out_file.read_text().splitlines():
+        if "=" in line:
+            k, v = line.split("=", 1)
+            outputs[k] = v
+    return proc.returncode, outputs, proc.stdout + proc.stderr
+
+
+def case_t13(tmp: Path) -> None:
+    print("\n--- T13 verifier accepts the good artifact")
+    tree = new_tree(tmp, "t13", kind="kleaf", sublevel="143")
+    run_action(tree, "", True)
+    fake_build_output(tree, "6.6.143-android15-8-4k")
+    rc, out, log = run_verifier(tree)
+    check_eq("T13 verifier exit", str(rc), "0")
+    check_eq("T13 built_version", out.get("built_version", ""), "6.6.143-android15-8-4k")
+    check_eq("T13 stock_version", out.get("stock_version", ""), "6.6.143-4k")
+    check_eq("T13 stock_suffix", out.get("stock_suffix", ""), "-4k")
+    check_eq("T13 kmi_count", out.get("kmi_count", ""), "1")
+    check_eq("T13 verified", out.get("verified", ""), "true")
+    check_re("T13 reports the four numbers", log,
+             r"\[1\] stock version[\s\S]*\[2\] version after the KMI insertion[\s\S]*"
+             r"\[3\] version in the built Image[\s\S]*\[4\] original long suffix[\s\S]*\[5\] KMI verification")
+
+    print("\n--- T13b verifier rejects an artifact whose suffix was dropped")
+    tree = new_tree(tmp, "t13b", kind="kleaf", sublevel="143")
+    run_action(tree, "", True)
+    fake_build_output(tree, "6.6.143-android15-8")
+    rc, out, log = run_verifier(tree)
+    check_eq("T13b exit non-zero", str(rc), "1")
+    check_eq("T13b verified=false", out.get("verified", ""), "false")
+    check_re("T13b names the mismatch", log, r"matches neither|changes more than")
+
+    print("\n--- T13c verifier rejects a missing KMI")
+    tree = new_tree(tmp, "t13c", kind="kleaf", sublevel="143")
+    run_action(tree, "", True)
+    fake_build_output(tree, "6.6.143-4k")
+    rc, out, log = run_verifier(tree)
+    check_eq("T13c exit non-zero", str(rc), "1")
+    check_eq("T13c kmi_count", out.get("kmi_count", ""), "0")
+    check_re("T13c names the mismatch", log, r"matches neither")
+
+    print("\n--- T13d untouched tree: the artifact must equal the stock string")
+    tree = new_tree(tmp, "t13d", kind="kleaf", sublevel="143")
+    run_action(tree, "", False)
+    fake_build_output(tree, "6.6.143-4k")
+    rc, out, log = run_verifier(tree)
+    check_eq("T13d exit", str(rc), "0")
+    check_eq("T13d built == stock", out.get("built_version", ""),
+             out.get("stock_version", ""))
+    check_eq("T13d no suffix invented", out.get("stock_suffix", ""), "-4k")
+
+    print("\n--- T13e legacy lane: git description in the artifact is accepted")
+    tree = new_tree(tmp, "t13e", kind="legacy", android="android14", kver="6.1",
+                    sublevel="118", kmi="11")
+    run_action(tree, "", True)
+    sha = sh(["git", "-C", str(tree.dir), "rev-parse", "HEAD"], cwd=tmp).stdout.strip()[:12]
+    built = f"6.1.118-android14-11-g{sha}"
+    # no CONFIG_LOCALVERSION on this fake legacy tree: the tree itself puts the
+    # KMI before the git description, and the build never rewrote the script.
+    fake_build_output(tree, built, cfg_localversion="")
+    rc, out, log = run_verifier(tree)
+    check_eq("T13e exit", str(rc), "0")
+    check_eq("T13e built_version", out.get("built_version", ""), built)
+    check_eq("T13e stock_version", out.get("stock_version", ""), built)
+
+
 def case_static() -> None:
     print("\n--- Static contract of the action")
     run, data = extract_action()
@@ -530,6 +686,15 @@ def case_static() -> None:
           'grep -q \'kmi_generation\' "$SCRIPT"' in run and "TREE_ADDS_KMI=false" in run)
     check("S7 kmi_preserved derived from probe",
           'occurrences "$AFTER_REL" "$EXPECTED_KMI"' in run)
+    check("S8 probe mirrors git visibility instead of always faking a repo",
+          'PROBE_GIT=false' in run and 'if [ "$FORMAT_FULL" != true ]; then PROBE_GIT=true; fi' in run)
+    check("S9 branding keeps a pristine script for the post-build check",
+          "setlocalversion.stock" in run and "state.env" in run)
+    check("S10 verifier exists and is executable", VERIFIER.is_file() and os.access(VERIFIER, os.X_OK))
+    build_yml = (REPO / ".github/workflows/build.yml").read_text()
+    check("S11 build runs the verifier right after the kernel build",
+          build_yml.index("./.github/actions/build-kernel")
+          < build_yml.index("./.github/actions/verify-kernel-release"))
 
 
 def main() -> int:
@@ -547,7 +712,7 @@ def main() -> int:
         tmp = Path(td)
         for fn in (case_t1, case_t2, case_t2b, case_t3, case_t4, case_t5,
                    case_t6, case_t7, case_t7c, case_t8, case_t8c, case_t9,
-                   case_t10):
+                   case_t10, case_t11, case_t12, case_t13):
             fn(tmp)
 
     print()

@@ -1,0 +1,36 @@
+name: 'Verify Kernel Release String'
+description: >-
+  Post-build proof that the kernel release embedded in the artifact is the
+  stock release with the KMI (and brand) tokens inserted, and that the original
+  long suffix survived verbatim. Reads the version out of the built Image and
+  compares it against the untouched scripts/setlocalversion run with the real
+  build config.
+inputs:
+  version:
+    description: 'Combined version (e.g. android15-6.6)'
+    required: true
+  kernel_version:
+    description: 'Kernel version (e.g. 6.6)'
+    required: true
+  sublevel:
+    description: 'Sublevel of kernel version (e.g. 143)'
+    required: true
+  page_size:
+    description: 'ARM64 page size (4k or 16k), informational'
+    required: false
+    default: '4k'
+runs:
+  using: "composite"
+  steps:
+    - name: Verify Kernel Release String
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        INPUT_VERSION: ${{ inputs.version }}
+        INPUT_KERNEL_VERSION: ${{ inputs.kernel_version }}
+        INPUT_SUBLEVEL: ${{ inputs.sublevel }}
+        INPUT_PAGE_SIZE: ${{ inputs.page_size }}
+      run: |
+        set -uo pipefail
+        echo "verifying release for ${INPUT_VERSION} (kernel ${INPUT_KERNEL_VERSION}, sublevel ${INPUT_SUBLEVEL}, page size ${INPUT_PAGE_SIZE})"
+        bash "${{ github.workspace }}/.github/scripts/verify_kernel_release.sh"

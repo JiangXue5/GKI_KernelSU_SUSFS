@@ -429,6 +429,18 @@ jobs:
           version: ${{ inputs.version }}
           page_size: ${{ inputs.page_size }}
 
+      - name: Verify Kernel Release String
+        # End-to-end check: the version inside the built Image must be the stock
+        # version (computed from the untouched setlocalversion + the real build
+        # config) with only the KMI/brand tokens inserted. A green build alone
+        # does not prove the suffix survived.
+        uses: ./.github/actions/verify-kernel-release
+        with:
+          version: ${{ inputs.version }}
+          kernel_version: ${{ inputs.kernel_version }}
+          sublevel: ${{ steps.extract.outputs.sublevel }}
+          page_size: ${{ inputs.page_size }}
+
       - name: ABI gate
         # Compares Module.symvers CRCs against the stock ABI of the tree that was
         # built and fails on any symbol whose CRC moved.
