@@ -1,0 +1,594 @@
+name: 'Apply BORE Scheduler'
+description: 'Apply the BORE (Burst-Oriented Response Enhancer) scheduler patch, keeping the GKI KMI intact'
+
+# Ported from the `bore` branch. The transforms below are the ones that were
+# validated against real android15-6.6 builds there; what changed in the port:
+#   * every unmapped kernel version is a hard error (the branch used to print
+#     "skipping" and continue, which, with CONFIG_SCHED_BORE in the fragment,
+#     turned into a Kconfig failure much later);
+#   * the apply step fails the job on any reject outside the one hunk that the
+#     GKI sysctl block legitimately rejects (and that the repair below rewrites);
+#   * the config is appended through .github/scripts/append_fragment.py like
+#     every other feature, instead of a second config mechanism;
+#   * a post-condition check (bore_check.py) inspects the RESULT, so a fuzz
+#     splice or a skipped fix step cannot pass as success.
+#
+# The vendored 6.6 patches have the author's `localversion` ("-bore") and
+# `scripts/setlocalversion` hunks stripped: they only rename the kernel string
+# and would collide with the branding/KMI verification this repo pins.
+
+inputs:
+  kernel_version:
+    description: 'Kernel version (e.g. 6.6)'
+    required: true
+    type: string
+  sublevel:
+    description: 'Kernel sublevel (recorded; the 6.6 patch is cut against 6.6.67)'
+    required: false
+    type: string
+    default: ''
+  variant:
+    description: 'BORE generation for 6.6: 5.9.6 (default) or 5.1.0'
+    required: false
+    type: string
+    default: '5.9.6'
+
+outputs:
+  applied:
+    description: 'true when the patch and every fix step landed'
+    value: ${{ steps.result.outputs.applied }}
+  version:
+    description: 'Upstream BORE version string (SCHED_BORE_VERSION)'
+    value: ${{ steps.verify.outputs.bore_version }}
+  patch:
+    description: 'Patch file actually applied'
+    value: ${{ steps.pick.outputs.name }}
+  sha256:
+    description: 'SHA-256 of the applied patch'
+    value: ${{ steps.verify.outputs.sha256 }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Select BORE patch
+      id: pick
+      shell: bash
+      env:
+        KVER: ${{ inputs.kernel_version }}
+        VARIANT: ${{ inputs.variant }}
+      run: |
+        set -euo pipefail
+
+        # Latest from the author's main branch, like the other external
+        # dependencies (BBG, Baseband Guard) which also track a branch tip.
+        BORE_BASE="https://raw.githubusercontent.com/firelzrd/bore-scheduler/main/patches"
+
+        # Patch selection, from dry-runs against the local GKI trees:
+        #   5.10 / 5.15  -> 5.15 patch   14-15/14 hunks
+        #   6.1          -> 6.1  patch   14/14 hunks
+        #   6.6          -> vendored    17/18 hunks (one sysctl hunk rejects,
+        #                    repaired below; there is no 6.6 entry in
+        #                    patches/ on main and the 6.12 patch rejects 9/24
+        #                    because its hooks target sched-ext code)
+        #   6.12 / 6.18  -> resolved from patches/stable/ at build time (the
+        #                    author promotes versions and deletes the old
+        #                    files, so a pinned name 404s)
+        case "$KVER" in
+          5.4|5.10|5.15)
+            URL="${BORE_BASE}/legacy/linux-5.15-bore/0001-linux5.15.y-bore5.1.0.patch"
+            NAME="0001-linux5.15.y-bore5.1.0.patch" ;;
+          6.1)
+            URL="${BORE_BASE}/legacy/linux-6.1-bore/0001-linux6.1.y-bore5.1.0.patch"
+            NAME="0001-linux6.1.y-bore5.1.0.patch" ;;
+          6.6)
+            # Not published under patches/ on main; vendored from the author's
+            # 6.6-bore branch tip (git diff linux-6.6.67..HEAD). Lives in the
+            # action dir because the setup step wipes kernel_patches/ and
+            # re-clones the separate WildKernels/kernel_patches repo.
+            if [ "$VARIANT" = "5.1.0" ]; then
+              URL=".github/actions/bore/patches/0001-linux6.6.67-bore5.1.0.patch"
+              NAME="0001-linux6.6.67-bore5.1.0.patch"
+            else
+              URL=".github/actions/bore/patches/0001-linux6.6.67-bore-5.9.6.patch"
+              NAME="0001-linux6.6.67-bore-5.9.6.patch"
+            fi
+            URL_IS_LOCAL="true" ;;
+          6.12|6.18)
+            LATEST=""
+            for attempt in 1 2 3 4 5; do
+              HTTP=$(curl -sSL -o /tmp/bore_listing.json -w '%{http_code}' \
+                "https://api.github.com/repos/firelzrd/bore-scheduler/contents/patches/stable") || HTTP=""
+              if [ "$HTTP" = "200" ]; then
+                NAMES=$(grep -o '"name": *"0001-linux'"${KVER}"'[^"]*\.patch"' /tmp/bore_listing.json \
+                  | sed 's/"name": *"//;s/"$//' | sort -V)
+                LATEST=$(printf '%s\n' "$NAMES" | tail -1)
+                break
+              fi
+              echo "patches/stable listing attempt $attempt/5 got HTTP ${HTTP:-none}; backing off..." >&2
+              sleep $((attempt * 15))
+            done
+            # API dead after all retries (secondary rate limit under matrix
+            # concurrency) -> fall back to the git protocol: blobless clone +
+            # ls-tree, no api.github.com, no rate limit. Live tree, so the
+            # resolved name is guaranteed to exist on raw.githubusercontent.
+            if [ "$HTTP" != "200" ]; then
+              echo "API listing failed (HTTP ${HTTP:-none}); falling back to git ls-tree..." >&2
+              rm -rf /tmp/bore-src
+              if git clone -q --depth 1 --filter=blob:none \
+                   https://github.com/firelzrd/bore-scheduler /tmp/bore-src 2>/dev/null; then
+                NAMES=$(git -C /tmp/bore-src ls-tree -r --name-only HEAD patches/stable/ \
+                  | xargs -n1 basename 2>/dev/null \
+                  | grep "^0001-linux${KVER}.*\.patch$" | sort -V || true)
+                LATEST=$(printf '%s\n' "$NAMES" | tail -1)
+                HTTP=200
+              fi
+              rm -rf /tmp/bore-src
+            fi
+            if [ "$HTTP" != "200" ]; then
+              echo "ERROR: could not list firelzrd/bore-scheduler patches/stable/ (HTTP $HTTP after 5 attempts + git fallback)" >&2
+              exit 1
+            fi
+            if [ -z "$LATEST" ]; then
+              echo "ERROR: no BORE patch for ${KVER} in patches/stable/ - the author really has none" >&2
+              echo "Check: https://github.com/firelzrd/bore-scheduler/tree/main/patches" >&2
+              exit 1
+            fi
+            echo "Resolved ${KVER} BORE patch: ${LATEST}"
+            URL="${BORE_BASE}/stable/${LATEST}"
+            NAME="$LATEST" ;;
+          *)
+            # BORE was requested explicitly (the step is gated on the build
+            # input), so an unsupported kernel is a configuration error, not a
+            # reason to build a kernel that silently lacks the scheduler.
+            echo "ERROR: no BORE patch is known for kernel ${KVER}; refusing to continue." >&2
+            echo "Supported: 5.4, 5.10, 5.15, 6.1, 6.6, 6.12, 6.18" >&2
+            exit 1 ;;
+        esac
+
+        echo "BORE patch for kernel ${KVER}: ${URL##*/}"
+        echo "url=${URL}" >> "$GITHUB_OUTPUT"
+        echo "name=${NAME}" >> "$GITHUB_OUTPUT"
+        echo "local=${URL_IS_LOCAL:-false}" >> "$GITHUB_OUTPUT"
+
+    - name: Download BORE patch
+      id: fetch
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        URL: ${{ steps.pick.outputs.url }}
+        LOCAL: ${{ steps.pick.outputs.local }}
+      run: |
+        set -euo pipefail
+        mkdir -p "${{ github.workspace }}/kernel_patches/bore"
+        if [ "$LOCAL" = "true" ]; then
+          cp "${{ github.workspace }}/$URL" \
+             "${{ github.workspace }}/kernel_patches/bore/0001-bore.patch"
+        else
+          curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors --connect-timeout 30 \
+            "$URL" -o "${{ github.workspace }}/kernel_patches/bore/0001-bore.patch"
+        fi
+        echo "downloaded=true" >> "$GITHUB_OUTPUT"
+
+    - name: Verify BORE patch provenance
+      id: verify
+      shell: bash
+      run: |
+        set -euo pipefail
+        PATCH="${{ github.workspace }}/kernel_patches/bore/0001-bore.patch"
+
+        [ -s "$PATCH" ] || { echo "ERROR: downloaded BORE patch is empty" >&2; exit 1; }
+
+        # Upstream patches are git-format-patch output authored by firelzrd;
+        # the vendored 6.6 ones are git-diff exports from his 6.6-bore branch
+        # and carry no mail headers, so check them by content instead.
+        if head -1 "$PATCH" | grep -q '^From [0-9a-f]\{40\} Mon Sep 17 00:00:00 2001$'; then
+          AUTHOR=$(head -20 "$PATCH" | sed -n 's/^From: //p' | head -1)
+          echo "BORE patch author: ${AUTHOR}"
+        elif head -1 "$PATCH" | grep -q '^diff --git a/include/linux/sched.h'; then
+          echo "BORE patch: vendored diff (no mail headers)"
+        else
+          echo "ERROR: unrecognized patch format" >&2
+          exit 1
+        fi
+
+        # The scheduler must not rename the kernel: the branding/KMI checks
+        # pin UTS_RELEASE. Fail here rather than at the release-string step.
+        if grep -qE '^(diff --git a/(localversion|scripts/setlocalversion))' "$PATCH"; then
+          echo "ERROR: patch touches localversion/setlocalversion - it would rewrite the kernel release string" >&2
+          exit 1
+        fi
+
+        BORE_VER=$(sed -n 's/^+#define SCHED_BORE_VERSION "\(.*\)"$/\1/p' "$PATCH" | head -1)
+        [ -n "$BORE_VER" ] || { echo "ERROR: SCHED_BORE_VERSION not found in the patch" >&2; exit 1; }
+        SHA=$(sha256sum "$PATCH" | cut -d' ' -f1)
+        echo "BORE version: ${BORE_VER}"
+        echo "BORE patch sha256: ${SHA}"
+        echo "bore_version=${BORE_VER}" >> "$GITHUB_OUTPUT"
+        echo "sha256=${SHA}" >> "$GITHUB_OUTPUT"
+        echo "patch_path=${PATCH}" >> "$GITHUB_OUTPUT"
+
+    - name: Record BORE status for the summary and the metadata
+      shell: bash
+      env:
+        BORE_VER: ${{ steps.verify.outputs.bore_version }}
+        PATCH_SHA: ${{ steps.verify.outputs.sha256 }}
+        PATCH_NAME: ${{ steps.pick.outputs.name }}
+        VARIANT_IN: ${{ inputs.variant }}
+        KVER: ${{ inputs.kernel_version }}
+      run: |
+        set -euo pipefail
+        {
+          echo "BORE_ENABLED=true"
+          echo "BORE_VERSION=${BORE_VER}"
+          echo "BORE_PATCH=${PATCH_NAME}"
+          echo "BORE_PATCH_SHA256=${PATCH_SHA}"
+          echo "BORE_VARIANT=${VARIANT_IN}"
+          echo "BORE_KERNEL=${KVER}"
+        } >> "$GITHUB_ENV"
+        echo "BORE: enabled (${BORE_VER}, ${PATCH_NAME})"
+
+    - name: Apply BORE patch
+      shell: bash
+      working-directory: ${{ github.workspace }}/kernel/common
+      env:
+        PATCH: ${{ steps.verify.outputs.patch_path }}
+      run: |
+        set -euo pipefail
+
+        [ -n "$PATCH" ] || { echo "ERROR: PATCH path is empty" >&2; exit 1; }
+        [ -s "$PATCH" ] || { echo "ERROR: BORE patch not found at $PATCH" >&2; exit 1; }
+
+        # --forward makes a re-run over an already-patched tree a no-op instead
+        # of a reverse-apply; -F3 absorbs sublevel drift between the tree the
+        # patch was cut against and the one building.
+        if patch -p1 -F3 --forward --no-backup-if-mismatch < "$PATCH"; then
+          echo "BORE patch applied cleanly."
+        else
+          echo "BORE patch reported rejects; inspecting them." >&2
+        fi
+
+        # GKI's sysctl block legitimately rejects (700000ULL defaults and an
+        # extra EXPORT_SYMBOL_GPL vs upstream); the repair step rewrites that
+        # whole region. Anything else is real drift and must not be built over.
+        BAD=0
+        while IFS= read -r r; do
+          [ -n "$r" ] || continue
+          if [ "$r" = "./kernel/sched/fair.c.rej" ]; then
+            if grep -q 'sysctl_sched_tunable_scaling' "$r"; then
+              echo "  expected reject: $r (sysctl block, repaired below)"
+              continue
+            fi
+          fi
+          echo "  UNEXPECTED reject: $r" >&2
+          BAD=1
+        done < <(find . -name '*.rej' 2>/dev/null | sort)
+        if [ "$BAD" != "0" ]; then
+          echo "ERROR: BORE patch did not apply where it must; refusing to build a half-patched tree." >&2
+          exit 1
+        fi
+
+        # Evidence the tree actually changed: the applied diffstat, not the
+        # exit code.
+        echo "=== applied diffstat (BORE files) ==="
+        git -C "${{ github.workspace }}/kernel/common" diff --stat -- \
+          include/linux/sched.h include/linux/sched/bore.h init/Kconfig \
+          kernel/Kconfig.hz kernel/fork.c kernel/sched \
+          > /tmp/bore-diffstat.txt 2>/dev/null || true
+        cat /tmp/bore-diffstat.txt || true
+
+    - name: Forward-declare task_of() (5.10 and below)
+      shell: bash
+      working-directory: ${{ github.workspace }}/kernel/common
+      env:
+        KVER: ${{ inputs.kernel_version }}
+      run: |
+        set -euo pipefail
+
+        # 5.10 defines task_of() in fair.c, twice, BELOW the point where BORE
+        # calls it (BORE inserts update_burst_score near the top of the file).
+        # A prototype fixes the ordering without risking a redefinition
+        # collision - but a static declaration with no definition in scope is
+        # itself a warning, so only do it where BORE actually needs it: 5.10
+        # and older. On 5.15+ sched.h provides task_of before the call site.
+        case "$KVER" in
+          5.4|5.10) ;;
+          *) echo "task_of is already in scope on ${KVER}; nothing to do."; exit 0 ;;
+        esac
+
+        if grep -q 'bore: task_of fwd' kernel/sched/fair.c; then
+          echo "already declared"; exit 0
+        fi
+        # Insert AFTER the include block: before it, struct sched_entity has no
+        # file-scope declaration yet, so the tag would get prototype scope.
+        EARLY=$(grep -n '^#include' kernel/sched/fair.c | awk -F: '$1 < 100' | tail -1 | cut -d: -f1)
+        [ -n "$EARLY" ] || { echo "ERROR: fair.c include block not found" >&2; exit 1; }
+        sed -i "${EARLY}a\\/* bore: task_of fwd - defined below, in scope too late */\nstatic inline struct task_struct *task_of(struct sched_entity *se);" kernel/sched/fair.c
+        grep -n 'bore: task_of fwd' kernel/sched/fair.c | head -2
+
+    - name: Move BORE fields into kABI slots (preserve KMI)
+      shell: bash
+      working-directory: ${{ github.workspace }}/kernel/common
+      env:
+        KVER: ${{ inputs.kernel_version }}
+        VARIANT: ${{ inputs.variant }}
+      run: |
+        set -euo pipefail
+
+        # BORE adds fields to sched_entity; inline they overflow the four u64
+        # KABI reserves and shift every later member, breaking the module ABI.
+        # Relocate them into the reservations instead.
+        #
+        # 6.6 + variant 5.1.0 is the eight-scalar shape bore66_510.py was
+        # written for: it rewrites the four sched_entity slots into flat
+        # anonymous payloads, so se->burst_time & co compile unchanged.
+        if [ "$KVER" = "6.6" ] && [ "$VARIANT" = "5.1.0" ]; then
+          python3 "${{ github.workspace }}/.github/scripts/bore66_510.py" \
+            include/linux/sched.h
+          grep -A9 'bore-kabi: burst_' include/linux/sched.h | head -10 || true
+          exit 0
+        fi
+
+        python3 "${{ github.workspace }}/.github/scripts/bore_kabi_612.py" \
+          include/linux/sched.h || rc=$?
+        if [ "${rc:-0}" != "0" ]; then
+          if grep -q 'struct bore_ctx' include/linux/sched.h; then
+            # 7.0.0 generation (6.12/6.18): the state is a bore_ctx member in
+            # task_struct and sched_entity is untouched; the task_struct slot
+            # relocation runs at the next step.
+            echo "NOTE: 7.x-generation BORE (bore_ctx in task_struct); sched_entity untouched."
+          elif grep -q 'struct sched_burst_cache child_burst;' include/linux/sched.h; then
+            # 6.6 5.9.6 shape: two 24-byte spinlocked caches cannot fit an
+            # 8-byte slot; the out-of-line step below handles them.
+            echo "NOTE: 6.6-shape inline burst fields; handled out-of-line below."
+          else
+            echo "ERROR: kABI relocation failed and the tree is not a known BORE shape" >&2
+            exit "${rc}"
+          fi
+        fi
+        grep -A9 'bore-kabi: burst_' include/linux/sched.h | head -10 || true
+
+    - name: Move 6.6 burst state into the KABI slots (fix sched_entity KMI shift)
+      shell: bash
+      working-directory: ${{ github.workspace }}/kernel/common
+      run: |
+        set -euo pipefail
+
+        # 5.9.6 keeps ~60 bytes inline in sched_entity (two 24-byte spinlocked
+        # caches plus scalars) and readers bootloop with stock vendor modules.
+        # bore66_state.py removes the inline block and lays the state FLAT
+        # across the structs' own free reserves using the DroidSpaces
+        # slot-merge method; bore66_flat.py translates only the cache
+        # accessors that change owner. No heap pointer, no fork/exit hooks -
+        # the caches stay plain struct memory, copied by dup_task_struct and
+        # re-initialized by the patch's own spin_lock_init hook.
+        if ! grep -q 'struct sched_burst_cache child_burst;' include/linux/sched.h 2>/dev/null; then
+          echo "No inline sched_entity burst fields (5.1.0/7.x generation); nothing to do."
+          exit 0
+        fi
+
+        python3 "${{ github.workspace }}/.github/scripts/bore66_state.py" \
+          include/linux/sched.h
+        python3 "${{ github.workspace }}/.github/scripts/bore66_flat.py" \
+          kernel/sched/bore.c kernel/sched/fair.c kernel/fork.c kernel/sched/debug.c
+
+        echo "=== sched_entity payload + task_struct cache merges ==="
+        grep -B1 -A4 'bore-kabi: 6.6 burst state' include/linux/sched.h | head -12 || true
+        echo "=== residual cache-accessor check ==="
+        if grep -rnE -- '->se\.group_burst|\bse->group_burst' \
+            kernel/sched/fair.c kernel/sched/debug.c kernel/sched/bore.c kernel/fork.c 2>/dev/null; then
+          echo "ERROR: residual sched_entity-form group_burst accessors remain" >&2
+          exit 1
+        fi
+        echo "clean: no residual sched_entity-form group_burst accessors"
+
+    - name: Move 7.x bore_ctx out-of-line (KABI slot-8 pointer)
+      shell: bash
+      working-directory: ${{ github.workspace }}/kernel/common
+      run: |
+        set -euo pipefail
+
+        # 7.0.0-generation BORE keeps a bore_ctx member inline in task_struct,
+        # which shifts every following member - task_struct is the most
+        # vendor-referenced struct in the KMI. bore12_state.py removes the
+        # member and consumes only RESERVE(8) for a pointer (genksyms still
+        # sees the stock reserved u64); bore12_flat.py rewrites X->bore.M into
+        # X->bore->M, NULL-guards the entry points, allocates in copy_process
+        # right after dup_task_struct and frees in free_task.
+        if ! grep -q 'struct bore_ctx' include/linux/sched.h 2>/dev/null; then
+          echo "No bore_ctx in task_struct (5.x/6.6 generations); nothing to do."
+          exit 0
+        fi
+
+        python3 "${{ github.workspace }}/.github/scripts/bore12_state.py" \
+          include/linux/sched.h
+
+        FILES=$(grep -rl -- '->bore\.\|struct bore_ctx \*ctx' include kernel 2>/dev/null || true)
+        python3 "${{ github.workspace }}/.github/scripts/bore12_flat.py" \
+          include/linux/sched/bore.h kernel/sched/bore.c \
+          kernel/sched/fair.c kernel/futex/waitwake.c kernel/fork.c \
+          $FILES
+
+        echo "=== task_struct slot-8 pointer after relocation ==="
+        grep -A2 'bore-kabi: bore_ctx lives' include/linux/sched.h | head -3 || true
+
+    - name: Fix BORE declaration order (-Wdeclaration-after-statement)
+      shell: bash
+      working-directory: ${{ github.workspace }}/kernel/common
+      run: |
+        set -euo pipefail
+
+        # BORE's update_burst_score() declares locals after an early-return
+        # guard, which trips -Wdeclaration-after-statement - fatal under
+        # -Werror. Only the 6.1-and-older shape has this; 6.12+ declares at
+        # file scope. Every substitution is keyed on a pattern that does not
+        # survive the rewrite, so a re-run is a no-op.
+        sed -i '/^\tif (!entity_is_task(se)) return;$/{N;N;N;N;s|\tif (!entity_is_task(se)) return;\n\tstruct task_struct \*p = task_of(se);\n\tu8 prio = p->static_prio - MAX_RT_PRIO;\n\tu8 prev_prio = min(39, prio + se->burst_score);|\tstruct task_struct *p;\n\tu8 prio, prev_prio, new_prio;\n\n\tif (!entity_is_task(se)) return;\n\tp = task_of(se);\n\tprio = p->static_prio - MAX_RT_PRIO;\n\tprev_prio = min(39, prio + se->burst_score);|}' kernel/sched/fair.c
+        sed -i 's|^\tu8 new_prio = min(39, prio + se->burst_score);$|\tnew_prio = min(39, prio + se->burst_score);|' kernel/sched/fair.c
+
+        # 5.9.6 (the 6.6 patch) has the same disease in kernel/sched/bore.c.
+        # Scoped to the function bodies: an unscoped substitution once rewrote
+        # restart_burst_rescale_deadline's only new_prio declaration into an
+        # assignment ("use of undeclared identifier 'new_prio'").
+        if [ -f kernel/sched/bore.c ]; then
+          sed -i '/^void update_burst_score(struct sched_entity \*se) {$/{N;N;N;s|void update_burst_score(struct sched_entity \*se) {\n\tif (!entity_is_task(se)) return;\n\tstruct task_struct \*p = task_of(se);\n\tu8 prev_prio = effective_prio(p);|void update_burst_score(struct sched_entity *se) { /* bore: decls hoisted */\n\tstruct task_struct *p;\n\tu8 prev_prio, burst_score, new_prio;\n\n\tif (!entity_is_task(se)) return;\n\tp = task_of(se);\n\tprev_prio = effective_prio(p);|}' kernel/sched/bore.c
+          sed -i '/^void update_burst_score/,/^}/ s|^\tu8 burst_score = 0;$|\tburst_score = 0;|' kernel/sched/bore.c
+          sed -i '/^void update_burst_score/,/^}/ s|^\tu8 new_prio = effective_prio(p);$|\tnew_prio = effective_prio(p);|' kernel/sched/bore.c
+          sed -i '/^void restart_burst_rescale_deadline/,/^}/ s|^\tu8 prev_prio = effective_prio(p);$|\tu8 prev_prio = effective_prio(p), new_prio;|' kernel/sched/bore.c
+          sed -i '/^void restart_burst_rescale_deadline/,/^}/ s|^\tu8 new_prio = effective_prio(p);$|\tnew_prio = effective_prio(p);|' kernel/sched/bore.c
+        else
+          echo "bore.c not present (5.1.0-generation patch); bore.c seds skipped."
+        fi
+
+    - name: Repair the rejected 6.6 sysctl block (5.9.6)
+      shell: bash
+      working-directory: ${{ github.workspace }}/kernel/common
+      env:
+        VARIANT: ${{ inputs.variant }}
+        KVER: ${{ inputs.kernel_version }}
+      run: |
+        set -euo pipefail
+        if [ "$KVER" != "6.6" ] || [ "$VARIANT" = "5.1.0" ]; then
+          echo "5.9.6 sysctl repair not applicable (${KVER}/${VARIANT}); skipping."
+          exit 0
+        fi
+        python3 "${{ github.workspace }}/.github/scripts/bore66_sysctl.py" \
+          kernel/sched/fair.c
+        echo "=== repaired region ==="
+        sed -n '/bore: sysctl block/,/normalized_sysctl_sched_base_slice/p' kernel/sched/fair.c
+
+    - name: Repair the rejected 6.6 sysctl block (5.1.0)
+      shell: bash
+      working-directory: ${{ github.workspace }}/kernel/common
+      env:
+        VARIANT: ${{ inputs.variant }}
+        KVER: ${{ inputs.kernel_version }}
+      run: |
+        set -euo pipefail
+        if [ "$KVER" != "6.6" ] || [ "$VARIANT" != "5.1.0" ]; then
+          echo "5.1.0 sysctl repair not applicable (${KVER}/${VARIANT}); skipping."
+          exit 0
+        fi
+        python3 "${{ github.workspace }}/.github/scripts/bore66_510_sysctl.py" \
+          kernel/sched/fair.c
+        echo "=== repaired region (5.1.0 variant) ==="
+        sed -n '/Minimal preemption granularity for CPU-bound tasks:/,/EXPORT_SYMBOL_GPL(sysctl_sched_base_slice)/p' kernel/sched/fair.c
+
+    - name: Repair a fuzz-spliced update_curr_bore block (6.12/6.18)
+      shell: bash
+      working-directory: ${{ github.workspace }}/kernel/common
+      run: |
+        set -euo pipefail
+
+        # BORE 7.0.0's update_curr() hunk was cut against 6.12.37, whose
+        # update_curr() still had 'p = task_of(curr); update_curr_task(p, ...)'.
+        # GKI 6.12.92+ inlined those away and put a fair_server comment there,
+        # so with -F3 the hunk anchors INSIDE that comment: '#ifdef' lands
+        # mid-comment, the comment's '/*' nests (-Wcomment) and the rest parses
+        # as code. Detection: the call site's guarding #ifdef sits right after
+        # a comment-continuation line. No-ops elsewhere.
+        if ! grep -q 'update_curr_bore' kernel/sched/fair.c 2>/dev/null; then
+          echo "No update_curr_bore call site (6.6/5.x generation or patch absent); nothing to do."
+          exit 0
+        fi
+
+        CALL_LINE=$(grep -n 'update_curr_bore(p, delta_exec);' kernel/sched/fair.c | head -1 | cut -d: -f1)
+        IFDEF_LINE=$(grep -n '^#ifdef CONFIG_SCHED_BORE' kernel/sched/fair.c \
+                     | awk -F: -v c="$CALL_LINE" '$1 < c && c - $1 <= 2 {print $1}' | tail -1)
+        ABOVE=$((IFDEF_LINE - 1))
+        ABOVE_TXT=$(sed -n "${ABOVE}p" kernel/sched/fair.c)
+        if printf '%s' "$ABOVE_TXT" | grep -qE '^\s*(\*|/\*)'; then
+          echo "Detected fuzz-spliced BORE block inside a comment (line $IFDEF_LINE)."
+        else
+          echo "update_curr_bore block looks correctly anchored; nothing to do."
+          exit 0
+        fi
+
+        sed -i "${IFDEF_LINE},$((CALL_LINE + 1))d" kernel/sched/fair.c
+
+        ANCHOR=$(grep -n $'\tif (entity_is_task(curr)) {' kernel/sched/fair.c \
+                 | awk -F: -v c="$CALL_LINE" '$1 < c' | tail -1 | cut -d: -f1)
+        if [ -z "$ANCHOR" ]; then
+          echo "ERROR: 'if (entity_is_task(curr)) {' anchor not found; refusing to guess." >&2
+          exit 1
+        fi
+        CALLER_ARG="p, delta_exec"
+        if ! grep -q 'struct task_struct \*p = task_of(curr);' kernel/sched/fair.c; then
+          CALLER_ARG="task_of(curr), delta_exec"
+        fi
+        sed -i "${ANCHOR}a\\
+        #ifdef CONFIG_SCHED_BORE\\
+        \t\tupdate_curr_bore(${CALLER_ARG});\\
+        #endif /* CONFIG_SCHED_BORE */" kernel/sched/fair.c
+        echo "relocated the BORE block to the update_curr() anchor"
+
+    - name: Fix reweight_task call (5.10 with the load_weight API)
+      shell: bash
+      working-directory: ${{ github.workspace }}/kernel/common
+      run: |
+        set -euo pipefail
+
+        # android12-5.10 (2024-11+) moved to reweight_task(p, const struct
+        # load_weight *), while android13-5.10 still takes an int prio. The era
+        # cannot be inferred from the sublevel - detect it from the header.
+        if grep -q 'reweight_task(struct task_struct \*p, const struct load_weight \*lw)' kernel/sched/sched.h; then
+          if ! grep -q 'bore: reweight via load_weight' kernel/sched/fair.c; then
+            sed -i 's|^\t\treweight_task(p, new_prio);$|\t\t{\n\t\t\tstruct load_weight lw;\n\t\t\t/* bore: reweight via load_weight (upstream API changed) */\n\t\t\tlw.weight = scale_load(sched_prio_to_weight[new_prio]);\n\t\t\tlw.inv_weight = sched_prio_to_wmult[new_prio];\n\t\t\treweight_task(p, \&lw);\n\t\t}|' kernel/sched/fair.c
+          fi
+          grep -n 'bore: reweight via load_weight' kernel/sched/fair.c | head -2
+        else
+          echo "bore-reweight: old reweight_task(p, int prio) API; BORE's call is already correct"
+        fi
+
+    - name: Verify the port landed (result, not exit code)
+      id: result
+      shell: bash
+      working-directory: ${{ github.workspace }}/kernel/common
+      env:
+        KVER: ${{ inputs.kernel_version }}
+        VARIANT: ${{ inputs.variant }}
+      run: |
+        set -euo pipefail
+
+        case "$KVER" in
+          6.6)   FAMILY=6.6 ;;
+          6.12|6.18) FAMILY=6.12 ;;
+          *)     FAMILY=legacy ;;
+        esac
+        python3 "${{ github.workspace }}/.github/scripts/bore_check.py" \
+          --family "$FAMILY" --variant "$VARIANT" \
+          --sched-h include/linux/sched.h --fair kernel/sched/fair.c \
+          --root .
+
+        # The repair consumed fair.c.rej; a leftover would mean a hunk we did
+        # not account for.
+        rm -f kernel/sched/fair.c.rej
+        if find . -name '*.rej' | grep -q .; then
+          echo "ERROR: rejects remain after the repair" >&2
+          find . -name '*.rej' >&2
+          exit 1
+        fi
+
+        echo "applied=true" >> "$GITHUB_OUTPUT"
+        {
+          echo "### BORE scheduler"
+          echo ""
+          echo "| field | value |"
+          echo "| --- | --- |"
+          echo "| patch | ${{ steps.pick.outputs.name }} |"
+          echo "| BORE version | ${{ steps.verify.outputs.bore_version }} |"
+          echo "| variant | ${{ inputs.variant }} |"
+          echo "| sha256 | ${{ steps.verify.outputs.sha256 }} |"
+          echo "| KABI | relocated into the struct reserves (KMI kept) |"
+        } >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Enable CONFIG_SCHED_BORE
+      shell: bash
+      working-directory: ${{ github.workspace }}/kernel/common
+      run: |
+        set -euo pipefail
+        # Same fragment the rest of the build uses; verify-fragment checks it
+        # against the resolved .config after the build, so a missing Kconfig
+        # entry (patch not applied) fails there instead of shipping silently.
+        python3 "${{ github.workspace }}/.github/scripts/append_fragment.py" \
+          "${{ github.workspace }}/.github/fragments/enable-bore.fragment" \
+          --dest wild_defconfig.fragment --label enable-bore

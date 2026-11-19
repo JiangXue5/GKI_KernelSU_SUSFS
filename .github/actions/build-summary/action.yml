@@ -118,6 +118,13 @@ runs:
           echo "| **SUSFS Version** | ${SUSFS_VER} |"
           echo "| **SUSFS Commit** | ${SUSFS_SHA} |"
           echo "| **NoMount Commit** | ${NOMOUNT_SHA} |"
+          # BORE is opt-in; when off the row says so explicitly instead of
+          # being absent, so a build log can never be read as "BORE shipped".
+          if [ "${BORE_ENABLED:-false}" = "true" ]; then
+            echo "| **BORE** | enabled ${BORE_VERSION:-unknown} (${BORE_PATCH:-patch}, variant ${BORE_VARIANT:-default}) |"
+          else
+            echo "| **BORE** | disabled (stock CFS/EEVDF) |"
+          fi
           echo "| **Feature Set** | ${{ inputs.feature_set }} |"
           echo "| **Variant** | ${{ inputs.variant }} |"
           echo "| **Page Size** | ${{ inputs.page_size }} |"

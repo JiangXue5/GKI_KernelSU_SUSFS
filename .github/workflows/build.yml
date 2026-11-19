@@ -78,6 +78,16 @@ on:
         required: false
         type: string
         default: "verified"
+      use_bore:
+        description: "Apply the BORE scheduler (false = stock CFS/EEVDF, main's previous behaviour)"
+        required: false
+        type: boolean
+        default: false
+      bore_variant:
+        description: "BORE patch generation for 6.6: 5.9.6 (default) or 5.1.0"
+        required: false
+        type: string
+        default: "5.9.6"
       page_size:
         description: "ARM64 page size: 4k (default) or 16k (Kleaf --page_size)"
         required: false
@@ -323,6 +333,8 @@ jobs:
           sublevel: ${{ steps.extract.outputs.sublevel }}
           os_patch_level: ${{ inputs.os_patch_level }}
           droidspaces_commit: ${{ inputs.droidspaces_commit }}
+          # 6.6 only: with BORE on, the SYSVIPC fix must not take slots 6-8.
+          bore: ${{ inputs.use_bore || false }}
 
       - name: USB Arsenal Patches
         # USB gadget functions (mass storage, HID, NCM) plus the kernel-patches
@@ -388,6 +400,17 @@ jobs:
           android_version: ${{ inputs.android_version }}
           sublevel: ${{ steps.extract.outputs.sublevel }}
           variant: ${{ inputs.variant }}
+
+      - name: Apply BORE Scheduler
+        # Off by default: main has always shipped stock CFS/EEVDF, and the gate
+        # keeps that path byte-identical (no patch, no fragment, no extra
+        # inputs to any other action).
+        if: inputs.use_bore
+        uses: ./.github/actions/bore
+        with:
+          kernel_version: ${{ inputs.kernel_version }}
+          sublevel: ${{ steps.extract.outputs.sublevel }}
+          variant: ${{ inputs.bore_variant || '5.9.6' }}
 
       # DISABLED: the BPF stack (BTF + eBPF + FUSE-BPF) is off until there is a
       # concrete need for it. Most of it is already in stock GKI (BPF_SYSCALL,

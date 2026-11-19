@@ -25,6 +25,10 @@ inputs:
   commit_mode:
     required: false
     default: ''
+  bore:
+    description: 'BORE scheduler state recorded in the metadata (true/false)'
+    required: false
+    default: 'false'
 
 runs:
   using: "composite"
@@ -146,6 +150,11 @@ runs:
           --arg upstream_ci_delta "${KSU_UPSTREAM_CI_DELTA:-N/A}" \
           --arg commit_mode "$commit_mode" \
           --arg susfs_mode "$susfs_mode" \
+          --arg bore "${BORE_ENABLED:-false}" \
+          --arg bore_version "${BORE_VERSION:-N/A}" \
+          --arg bore_variant "${BORE_VARIANT:-N/A}" \
+          --arg bore_patch "${BORE_PATCH:-N/A}" \
+          --arg bore_sha256 "${BORE_PATCH_SHA256:-N/A}" \
           --arg susfs_commit "${SUSFS_COMMIT:-N/A}" \
           --arg nomount_commit "${NOMOUNT_COMMIT:-N/A}" \
           --arg usba_commit "${USBA_COMMIT:-N/A}" \
@@ -181,6 +190,13 @@ runs:
               commit_mode: $commit_mode,
               susfs_mode: $susfs_mode
             },
+            bore: {
+              enabled: ($bore == "true"),
+              version: $bore_version,
+              variant: $bore_variant,
+              patch: $bore_patch,
+              patch_sha256: $bore_sha256
+            },
             susfs_revision: $susfs_commit,
             nomount_commit: $nomount_commit,
             usba_commit: $usba_commit,
@@ -212,6 +228,8 @@ runs:
           (.root.ksu_version | test("^[0-9]+$|^N/A$")) and
           (.root.ksu_version_full | length > 0) and
           (.root.commit_mode | length > 0) and
+          (.bore.enabled | type == "boolean") and
+          (.bore.version | length > 0) and
           ((.susfs_revision | test("^[0-9a-f]{40}$")) or .susfs_revision == "N/A") and
           (.kernel_source_commit | test("^[0-9a-f]{40}$")) and
           (.artifact_url | startswith("https://")) and

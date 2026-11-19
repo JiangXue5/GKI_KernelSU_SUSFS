@@ -38,5 +38,11 @@ jobs:
         # fallback, the legacy flavor alias and the SUSFS branch mapping.
         run: python3 .github/scripts/test_ksu_version.py
 
+      - name: Test the BORE port
+        # Runs the KABI/sysctl transforms against fixture trees (idempotency,
+        # drift = hard failure) and checks the build wiring: the gate defaults
+        # off, every leg forwards it, and no patch touches the kernel string.
+        run: python3 .github/scripts/test_bore_port.py
+
       - name: Validate Python syntax
         run: python3 .github/scripts/validate_python.py

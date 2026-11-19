@@ -91,6 +91,16 @@ on:
         required: false
         type: string
         default: "4k"
+      use_bore:
+        description: "Apply the BORE scheduler (default off: stock CFS/EEVDF)"
+        required: false
+        type: boolean
+        default: false
+      bore_variant:
+        description: "BORE patch generation for 6.6: 5.9.6 (default) or 5.1.0"
+        required: false
+        type: string
+        default: "5.9.6"
 
 jobs:
   generate-matrix:
@@ -345,5 +355,7 @@ jobs:
       commit_mode: ${{ inputs.commit_mode }}
       allow_version_mismatch: ${{ inputs.allow_version_mismatch }}
       page_size: ${{ inputs.page_size }}
+      use_bore: ${{ inputs.use_bore }}
+      bore_variant: ${{ inputs.bore_variant || '5.9.6' }}
       stock_config_artifact: stock-configs-${{ needs.generate-matrix.outputs.version_slug }}
     secrets: inherit

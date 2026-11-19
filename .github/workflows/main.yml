@@ -61,6 +61,17 @@ on:
           - latest
           - verified
         default: verified
+      use_bore:
+        description: "BORE scheduler (off = stock CFS/EEVDF, unchanged from previous main builds)"
+        type: boolean
+        default: false
+      bore_variant:
+        description: "BORE generation for 6.6 kernels (5.9.6 keeps the KMI via flat KABI slots)"
+        type: choice
+        options:
+          - 5.9.6
+          - 5.1.0
+        default: 5.9.6
       root_flavor:
         description: "Root Flavor"
         type: choice
@@ -710,6 +721,8 @@ jobs:
       os_patch_level: ${{ inputs.os_patch_level || 'All' }}
       allow_version_mismatch: ${{ inputs.allow_version_mismatch || false }}
       page_size: ${{ inputs.page_size || '4k' }}
+      use_bore: ${{ inputs.use_bore || false }}
+      bore_variant: ${{ inputs.bore_variant || '5.9.6' }}
     secrets: inherit
 
   build-android13-5-10:
@@ -742,6 +755,8 @@ jobs:
       os_patch_level: ${{ inputs.os_patch_level || 'All' }}
       allow_version_mismatch: ${{ inputs.allow_version_mismatch || false }}
       page_size: ${{ inputs.page_size || '4k' }}
+      use_bore: ${{ inputs.use_bore || false }}
+      bore_variant: ${{ inputs.bore_variant || '5.9.6' }}
     secrets: inherit
 
   build-android13-5-15:
@@ -774,6 +789,8 @@ jobs:
       os_patch_level: ${{ inputs.os_patch_level || 'All' }}
       allow_version_mismatch: ${{ inputs.allow_version_mismatch || false }}
       page_size: ${{ inputs.page_size || '4k' }}
+      use_bore: ${{ inputs.use_bore || false }}
+      bore_variant: ${{ inputs.bore_variant || '5.9.6' }}
     secrets: inherit
 
   build-android14-5-15:
@@ -806,6 +823,8 @@ jobs:
       os_patch_level: ${{ inputs.os_patch_level || 'All' }}
       allow_version_mismatch: ${{ inputs.allow_version_mismatch || false }}
       page_size: ${{ inputs.page_size || '4k' }}
+      use_bore: ${{ inputs.use_bore || false }}
+      bore_variant: ${{ inputs.bore_variant || '5.9.6' }}
     secrets: inherit
 
   build-android14-6-1:
@@ -838,6 +857,8 @@ jobs:
       os_patch_level: ${{ inputs.os_patch_level || 'All' }}
       allow_version_mismatch: ${{ inputs.allow_version_mismatch || false }}
       page_size: ${{ inputs.page_size || '4k' }}
+      use_bore: ${{ inputs.use_bore || false }}
+      bore_variant: ${{ inputs.bore_variant || '5.9.6' }}
     secrets: inherit
 
   build-android15-6-6:
@@ -870,6 +891,8 @@ jobs:
       os_patch_level: ${{ inputs.os_patch_level || 'All' }}
       allow_version_mismatch: ${{ inputs.allow_version_mismatch || false }}
       page_size: ${{ inputs.page_size || '4k' }}
+      use_bore: ${{ inputs.use_bore || false }}
+      bore_variant: ${{ inputs.bore_variant || '5.9.6' }}
     secrets: inherit
 
   build-android16-6-12:
@@ -902,6 +925,8 @@ jobs:
       os_patch_level: ${{ inputs.os_patch_level || 'All' }}
       allow_version_mismatch: ${{ inputs.allow_version_mismatch || false }}
       page_size: ${{ inputs.page_size || '4k' }}
+      use_bore: ${{ inputs.use_bore || false }}
+      bore_variant: ${{ inputs.bore_variant || '5.9.6' }}
     secrets: inherit
 
   build-android17-6-18:
@@ -939,6 +964,8 @@ jobs:
       os_patch_level: ${{ inputs.os_patch_level || 'All' }}
       allow_version_mismatch: ${{ inputs.allow_version_mismatch || false }}
       page_size: ${{ inputs.page_size || '4k' }}
+      use_bore: ${{ inputs.use_bore || false }}
+      bore_variant: ${{ inputs.bore_variant || '5.9.6' }}
     secrets: inherit
 
   telegram-announce:
