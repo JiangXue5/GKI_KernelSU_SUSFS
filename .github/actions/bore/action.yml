@@ -549,6 +549,17 @@ runs:
       run: |
         set -euo pipefail
 
+        # The apply step proved this reject is the sysctl hunk, and the repair
+        # step rewrote that whole region - the file is stale by construction.
+        # Drop it before the check, which then flags anything else left over.
+        if [ -f kernel/sched/fair.c.rej ]; then
+          grep -q 'sysctl_sched_tunable_scaling' kernel/sched/fair.c.rej || {
+            echo "ERROR: fair.c.rej is not the sysctl hunk" >&2
+            exit 1
+          }
+          rm -f kernel/sched/fair.c.rej
+        fi
+
         case "$KVER" in
           6.6)   FAMILY=6.6 ;;
           6.12|6.18) FAMILY=6.12 ;;
@@ -558,15 +569,6 @@ runs:
           --family "$FAMILY" --variant "$VARIANT" \
           --sched-h include/linux/sched.h --fair kernel/sched/fair.c \
           --root .
-
-        # The repair consumed fair.c.rej; a leftover would mean a hunk we did
-        # not account for.
-        rm -f kernel/sched/fair.c.rej
-        if find . -name '*.rej' | grep -q .; then
-          echo "ERROR: rejects remain after the repair" >&2
-          find . -name '*.rej' >&2
-          exit 1
-        fi
 
         echo "applied=true" >> "$GITHUB_OUTPUT"
         {

@@ -431,6 +431,12 @@ def t7_workflow_wiring():
     check("kernel/sched/fair.c.rej" in act,
           "only the known sysctl reject is tolerated")
     check("bore_check.py" in act, "the action verifies the result, not the exit code")
+    # Regression: the known sysctl reject must be dropped BEFORE the check,
+    # otherwise bore_check fails on the file it is supposed to tolerate.
+    drop = act.index("rm -f kernel/sched/fair.c.rej")
+    verify = act.index(".github/scripts/bore_check.py")
+    check(drop < verify,
+          "the known sysctl reject is cleared before bore_check runs")
 
 
 def t8_no_collateral():
