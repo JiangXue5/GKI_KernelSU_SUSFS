@@ -557,7 +557,7 @@ jobs:
         # the artefact carries both sides of the comparison (our Module.symvers
         # and the stock .stg the gate read), so the drift can be diffed offline
         # instead of guessed at from a 40-symbol excerpt.
-        if: always()
+        if: failure() && inputs.use_bore
         uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.extract.outputs.file_name }}-abi-evidence
