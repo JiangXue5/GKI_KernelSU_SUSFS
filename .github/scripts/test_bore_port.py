@@ -367,6 +367,34 @@ def t6_bore_check():
         shutil.rmtree(tmp)
 
 
+def t6c_kmi_guard():
+    """The on_rq check must fail if a future edit loses the normalisation."""
+    print("\n[T6c] bore_check.py refuses a surviving on_rq narrowing")
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        write_tree(tmp)
+        for s, a in (("bore66_state.py", ["include/linux/sched.h"]),
+                     ("bore66_flat.py", ["kernel/sched/bore.c"]),
+                     ("bore66_sysctl.py", ["kernel/sched/fair.c"])):
+            run_py(s, *a, cwd=tmp)
+        sh = tmp / "include/linux/sched.h"
+        text = sh.read_text()
+        # undo exactly what the KMI fix does, and nothing else
+        broken = text.replace(
+            "\tunsigned int\t\t\ton_rq;",
+            "\tunsigned char\t\t\ton_rq;\n\tunsigned char\t\t\trel_deadline;")
+        check(broken != text, "fixture actually re-narrows on_rq")
+        sh.write_text(broken)
+        r = run_py("bore_check.py", "--family", "6.6", "--variant", "5.9.6",
+                   "--sched-h", "include/linux/sched.h",
+                   "--fair", "kernel/sched/fair.c", "--root", ".", cwd=tmp)
+        check(r.returncode != 0, "a narrow on_rq fails the check")
+        check("on_rq" in r.stdout and "stock declaration" in r.stdout,
+              "the failure names the KMI reason")
+    finally:
+        shutil.rmtree(tmp)
+
+
 def t6b_variant_510():
     print("\n[T6b] the 5.1.0 generation is checked with its own invariants")
     tmp = Path(tempfile.mkdtemp())
@@ -480,6 +508,7 @@ def main():
     t4_sysctl_rewrite()
     t5_fail_loudly_on_drift()
     t6_bore_check()
+    t6c_kmi_guard()
     t6b_variant_510()
     t7_workflow_wiring()
     t8_no_collateral()
