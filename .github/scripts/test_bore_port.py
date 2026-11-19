@@ -426,6 +426,28 @@ def t6b_variant_510():
         shutil.rmtree(tmp)
 
 
+def t9_sysvipc_slots():
+    """The 6.6 SYSVIPC fix must stay KABI-slot based for every build."""
+    print("\n[T9] one SYSVIPC path, slots only")
+    ds = ROOT / ".github/actions/droidspaces/action.yml"
+    act = ds.read_text() if ds.is_file() else ""
+    check("bore" not in act, "the SYSVIPC step has no BORE-specific branch")
+    check(act.count("fix_sysvipc_kabi_6_7_8.patch") >= 2,
+          "every below-6.12 leg uses the upstream 6_7_8 patch")
+    gap = ROOT / ".github/actions/droidspaces/patches"
+    check(not gap.exists(), "no vendored gap patch is left behind")
+    hits = [p for p in (ROOT / ".github").rglob("*")
+            if p.is_file() and p.suffix in (".yml", ".patch")
+            and "__kabi_ignored" in p.read_text(errors="surrogateescape")]
+    check(not hits, f"no shipped patch reintroduces __kabi_ignored ({hits})")
+    checker = (ROOT / ".github/scripts/bore_check.py").read_text()
+    check("__kabi_ignored" in checker,
+          "bore_check.py keeps the guard against member-in-padding tricks")
+    build = (ROOT / ".github/workflows/build.yml").read_text()
+    check("bore: ${{ inputs.use_bore" not in build,
+          "build.yml no longer switches the DS patch on BORE")
+
+
 def t7_workflow_wiring():
     print("\n[T7] build wiring")
     build = (ROOT / ".github/workflows/build.yml").read_text()
@@ -439,8 +461,8 @@ def t7_workflow_wiring():
           "build.yml defaults use_bore to false (main behaviour unchanged)")
     check("if: inputs.use_bore" in build, "the BORE step is gated on the input")
     check("uses: ./.github/actions/bore" in build, "build.yml applies the action")
-    check("bore: ${{ inputs.use_bore || false }}" in build,
-          "droidspaces is told whether BORE is on")
+    check("bore: ${{ inputs.use_bore || false }}" not in build,
+          "the DS patch choice is NOT tied to BORE (one 6.6 path)")
 
     check("use_bore:" in prepare and "bore_variant:" in prepare,
           "prepare.yml forwards both inputs")
@@ -454,12 +476,10 @@ def t7_workflow_wiring():
     check(re.search(r"use_bore:\n\s+description:.*\n\s+type: boolean\n\s+default: false", main) is not None,
           "dispatch input defaults to false")
 
-    check('if [ "${{ inputs.bore }}" == "true" ]; then' in ds,
-          "droidspaces picks its 6.6 SYSVIPC fix by BORE state")
-    check("001.GKI-6.6-fix_sysvipc_kabi_gap.patch" in ds,
-          "the gap variant exists for the BORE combination")
+    check('if [ "${{ inputs.bore }}" == "true" ]; then' not in ds,
+          "droidspaces has no BORE-specific branch")
     check("001.GKI-below-6.12-fix_sysvipc_kabi_6_7_8.patch" in ds,
-          "the stock 6-7-8 variant is still there for BORE off")
+          "the slot 6-8 SYSVIPC patch serves every 6.6 build")
 
     check(frag.is_file(), "the config fragment exists")
     body = frag.read_text() if frag.is_file() else ""
@@ -521,6 +541,7 @@ def main():
     t4_sysctl_rewrite()
     t5_fail_loudly_on_drift()
     t6_bore_check()
+    t9_sysvipc_slots()
     t6c_kmi_guard()
     t6b_variant_510()
     t7_workflow_wiring()

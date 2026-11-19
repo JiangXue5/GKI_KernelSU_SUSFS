@@ -20,11 +20,6 @@ inputs:
     description: 'Pinned Droidspaces-OSS commit (empty = main tip)'
     required: false
     default: ''
-  bore:
-    description: 'BORE scheduler enabled in this build (changes the 6.6 SYSVIPC slot fix)'
-    required: false
-    default: 'false'
-
 runs:
   using: composite
   steps:
@@ -59,19 +54,19 @@ runs:
           cp ${{ github.workspace }}/Droidspaces-OSS/Documentation/resources/kernel-patches/GKI/kernel-6.12/001.GKI-6.12-or-above-fix_sysvipc_kabi.patch ./
           patch -p1 < 001.GKI-6.12-or-above-fix_sysvipc_kabi.patch
         elif [ "${{ inputs.version }}" == "android15-6.6" ]; then
-          # The stock 6_7_8 fix consumes task_struct KABI slots 6-8, which is
-          # what main has always shipped. With BORE enabled those slots must
-          # stay free (bore66_state.py parks group_burst in 3-5 and leaves
-          # 6-8 alone), so the SYSVIPC structs move into the pre-sched_entity
-          # alignment hole instead - that patch consumes no slots at all.
-          # BORE off => byte-identical to the previous build path.
-          if [ "${{ inputs.bore }}" == "true" ]; then
-            cp ${{ github.workspace }}/.github/actions/droidspaces/patches/001.GKI-6.6-fix_sysvipc_kabi_gap.patch ./
-            patch -p1 < 001.GKI-6.6-fix_sysvipc_kabi_gap.patch
-          else
-            cp ${{ github.workspace }}/Droidspaces-OSS/Documentation/resources/kernel-patches/GKI/below-kernel-6.12/001.GKI-below-6.12-fix_sysvipc_kabi_6_7_8.patch ./
-            patch -p1 < 001.GKI-below-6.12-fix_sysvipc_kabi_6_7_8.patch
-          fi
+          # One patch for every 6.6 build, BORE or not. The 6_7_8 fix replaces
+          # task_struct KABI slots 6-8 with ANDROID_KABI_USE/_REPLACE, which
+          # collapses back to the plain reserves under __GENKSYMS__, so
+          # task_struct hashes exactly like stock. BORE parks group_burst in
+          # slots 3-5 and never touches 6-8, so the two compose.
+          #
+          # Do NOT "improve" this by moving the SYSVIPC structs into the
+          # alignment hole before sched_entity (an earlier port did): those
+          # unions are real members of task_struct, genksyms hashes member
+          # lists, and task_struct sits under ~6300 exported CRCs - the ABI
+          # gate then reports exactly that many mismatches.
+          cp ${{ github.workspace }}/Droidspaces-OSS/Documentation/resources/kernel-patches/GKI/below-kernel-6.12/001.GKI-below-6.12-fix_sysvipc_kabi_6_7_8.patch ./
+          patch -p1 < 001.GKI-below-6.12-fix_sysvipc_kabi_6_7_8.patch
         elif [ "${{ inputs.version }}" == "android14-6.1" ]; then
           #curl -L https://raw.githubusercontent.com/ravindu644/Droidspaces-OSS/main/Documentation/resources/kernel-patches/GKI/below-kernel-6.12/001.GKI-below-6.12-fix_sysvipc_kabi_1_2_3.patch
           #curl -L https://raw.githubusercontent.com/ravindu644/Droidspaces-OSS/main/Documentation/resources/kernel-patches/GKI/below-kernel-6.12/001.GKI-below-6.12-fix_sysvipc_kabi_3_4_5.patch

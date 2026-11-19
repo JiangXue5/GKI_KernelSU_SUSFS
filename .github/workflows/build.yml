@@ -333,8 +333,6 @@ jobs:
           sublevel: ${{ steps.extract.outputs.sublevel }}
           os_patch_level: ${{ inputs.os_patch_level }}
           droidspaces_commit: ${{ inputs.droidspaces_commit }}
-          # 6.6 only: with BORE on, the SYSVIPC fix must not take slots 6-8.
-          bore: ${{ inputs.use_bore || false }}
 
       - name: USB Arsenal Patches
         # USB gadget functions (mass storage, HID, NCM) plus the kernel-patches

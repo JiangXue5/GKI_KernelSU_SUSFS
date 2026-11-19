@@ -143,6 +143,24 @@ def family_66(sched_h, fair, variant):
         need(fc, "static const unsigned int nsecs_per_tick",
              "nsecs_per_tick declared")
 
+    # KMI, second half: task_struct must stay hash-neutral too. The SYSVIPC
+    # workaround has to use KABI slots 6-8 (ANDROID_KABI_USE/_REPLACE, which
+    # collapse back to plain reserves under __GENKSYMS__). An earlier port
+    # parked the two sysv structs in the alignment hole before sched_entity
+    # instead: layout-neutral, but genksyms hashes member lists and
+    # task_struct sits under ~6300 exported CRCs, so the gate reported
+    # 6155/6152 mismatches with identical values in both BORE variants.
+    if "__kabi_ignored" in sh:
+        fail("sched.h adds real members to task_struct padding "
+             "(__kabi_ignored_*): that changes task_struct's genksyms text "
+             "and moves every CRC that reaches it")
+    else:
+        ok("task_struct gains no out-of-slot members")
+    if "ANDROID_KABI_USE(6," in sh:
+        ok("SYSVIPC lives in task_struct slots 6-8 (genksyms-neutral)")
+    elif "ANDROID_KABI_RESERVE(8);" in sh:
+        ok("task_struct slots 6-8 are plain reserves (SYSVIPC unpatched)")
+
     need(fc, "sysctl_sched_min_base_slice", "min_base_slice declared")
     need(fc, "curr->burst_time += delta_exec;", "update_curr accounts burst time")
     need(fc, "#ifdef CONFIG_SCHED_BORE", "BORE arms present in fair.c")
