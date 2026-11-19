@@ -12,18 +12,18 @@
 #
 # This script closes that gap after the build:
 #   * it takes the untouched copy of scripts/setlocalversion that the branding
-#     action saved, runs it against the *real* build config (the .config /
-#     auto.conf the build resolved, including CONFIG_LOCALVERSION), and that
-#     produces the release string the same tree would have produced without any
-#     branding;
-#   * it runs the in-tree (possibly rewritten) script under exactly the same
-#     conditions and compares the two;
-#   * it reads the version out of the built Image (and kernel.release) and
-#     requires it to equal what the rewritten script emits.
+#     action saved and runs it against the real build config, which yields the
+#     suffix the same tree would have produced without any branding;
+#   * it runs the in-tree (possibly rewritten) script under the same conditions
+#     and requires the version extracted from the built Image to equal the
+#     version prefix plus that suffix;
+#   * it removes the tokens this run inserted from the new suffix and requires
+#     the result to equal the stock suffix byte for byte. That comparison does
+#     not depend on what the version prefix was, so a lost, reordered or
+#     truncated suffix cannot hide behind a mismatch elsewhere.
 #
-# If the artifact's suffix differs from the stock baseline by anything other
-# than the KMI/brand tokens this run inserted, the step fails. A green build is
-# not accepted as proof on its own.
+# When Kleaf's make environment is available, the exact version prefix is known
+# too, and the whole stock release string is reported and compared.
 
 set -uo pipefail
 
@@ -145,16 +145,49 @@ fi
 AUTOCONF="$(make_autoconf "$CFG_SOURCE")"
 CONFIG_SOURCE="$CFG_SOURCE"
 
+# -------------------------------------------------------- version prefix -----
+# The build system may fold the KMI generation into the version prefix it hands
+# to setlocalversion (that is how "6.6.143-android15-8-4k" is produced here),
+# so the prefix cannot be assumed to be the plain kernel version. Kleaf writes
+# the make environment it uses; read it from there when it is available.
+KV=""
+KV_SOURCE=""
+read_env_kv() {
+  local f="$1" v
+  [ -f "$f" ] || return 1
+  v="$(sed -n 's/^KERNELVERSION=//p' "$f" 2>/dev/null | head -n 1 | tr -d "\"'")"
+  [ -n "$v" ] || return 1
+  KV="$v"
+  KV_SOURCE="$f"
+  return 0
+}
+ENV_CANDIDATES=""
+for f in \
+  "$WORKSPACE/kernel/bazel-bin/common/kernel_aarch64_env/kernel_env" \
+  "$WORKSPACE/kernel/bazel-bin/common/kernel_aarch64/out_dir/.kernel_env" \
+  "/home/runner/out/.kernel_env"; do
+  read_env_kv "$f" && break
+done
+if [ -z "$KV" ] && [ -d "$WORKSPACE/kernel/bazel-bin/common" ]; then
+  ENV_CANDIDATES="$(find "$WORKSPACE/kernel/bazel-bin/common" -maxdepth 3 -type f \
+    \( -name 'kernel_env' -o -name '.kernel_env' \) 2>/dev/null | head -n 5)"
+  for f in $ENV_CANDIDATES; do read_env_kv "$f" && break; done
+fi
+if [ -z "$KV" ]; then
+  KV="$kernel_version"
+  KV_SOURCE="fallback (no Kleaf kernel_env found)"
+fi
+
 # --------------------------------------------------------------- baselines ---
 # The script reads include/config/auto.conf from the working directory and the
 # localversion* files plus git metadata from its srctree argument. Two modes are
 # possible for the real build:
 #   none   - srctree has no .git (Kleaf sandbox: --config=fast does not stamp)
 #   source - srctree is the checked out tree with .git (build/build.sh lanes)
-# Both are computed; the one that matches the artifact is the build's real
-# environment, and the check is then made against that one.
-run_rel() {   # $1 = script, $2 = none|source
-  local script="$1" mode="$2" d src out=""
+# Both are computed; the one that reproduces the artifact is the build's real
+# environment.
+run_rel() {   # $1 = script, $2 = none|source, $3 = version prefix
+  local script="$1" mode="$2" kv="$3" d src out=""
   d="$(mktemp -d)"
   mkdir -p "$d/include/config"
   cp "$AUTOCONF" "$d/include/config/auto.conf"
@@ -164,13 +197,13 @@ run_rel() {   # $1 = script, $2 = none|source
   src="$d"
   [ "$mode" = source ] && src="$COMMON"
   if [ "$format" = full ]; then
-    out="$( cd "$d" && KERNELVERSION="$kernel_version" LOCALVERSION= LC_ALL=C sh "$script" "$src" 2>/dev/null )"
+    out="$( cd "$d" && KERNELVERSION="$kv" LOCALVERSION= LC_ALL=C sh "$script" "$src" 2>/dev/null )"
   elif [ -n "$branch" ] && [ -n "$kmi_generation" ]; then
-    out="$( cd "$d" && KERNELVERSION="$kernel_version" LOCALVERSION= LC_ALL=C sh "$script" "$src" "$branch" "$kmi_generation" 2>/dev/null )"
-    [ -n "$out" ] && out="$kernel_version$out"
+    out="$( cd "$d" && KERNELVERSION="$kv" LOCALVERSION= LC_ALL=C sh "$script" "$src" "$branch" "$kmi_generation" 2>/dev/null )"
+    [ -n "$out" ] && out="$kv$out"
   else
-    out="$( cd "$d" && KERNELVERSION="$kernel_version" LOCALVERSION= LC_ALL=C sh "$script" "$src" 2>/dev/null )"
-    [ -n "$out" ] && out="$kernel_version$out"
+    out="$( cd "$d" && KERNELVERSION="$kv" LOCALVERSION= LC_ALL=C sh "$script" "$src" 2>/dev/null )"
+    [ -n "$out" ] && out="$kv$out"
   fi
   rm -rf "$d"
   # .github/actions/clean-kernel-flags removes the "-dirty" branch from the
@@ -179,10 +212,41 @@ run_rel() {   # $1 = script, $2 = none|source
   printf '%s' "${out%-dirty}"
 }
 
-BASE_NONE="$(run_rel "$STOCK_SCRIPT" none)"
-PRED_NONE="$(run_rel "$INTREE_SCRIPT" none)"
-BASE_SRC="$(run_rel "$STOCK_SCRIPT" source)"
-PRED_SRC="$(run_rel "$INTREE_SCRIPT" source)"
+split_rel() {   # $1 = full release, $2 = version prefix -> suffix
+  local rel="$1" kv="$2"
+  case "$rel" in
+    "$kv"*) printf '%s' "${rel#"$kv"}" ;;
+    *) printf '%s' "$rel" ;;
+  esac
+}
+
+BASE_NONE="$(run_rel "$STOCK_SCRIPT" none "$KV")"
+PRED_NONE="$(run_rel "$INTREE_SCRIPT" none "$KV")"
+BASE_SRC="$(run_rel "$STOCK_SCRIPT" source "$KV")"
+PRED_SRC="$(run_rel "$INTREE_SCRIPT" source "$KV")"
+
+MODE=""
+if [ "$PRED_NONE" = "$ACT" ]; then
+  MODE=none
+elif [ "$PRED_SRC" = "$ACT" ]; then
+  MODE=source
+fi
+
+if [ -z "$MODE" ] && [ -n "$expected_kmi" ] && [ "$KV" = "$kernel_version" ]; then
+  # The prefix may already carry the KMI generation; retry once with it.
+  KV_ALT="${kernel_version}${expected_kmi}"
+  ALT_NONE="$(run_rel "$INTREE_SCRIPT" none "$KV_ALT")"
+  ALT_SRC="$(run_rel "$INTREE_SCRIPT" source "$KV_ALT")"
+  if [ "$ALT_NONE" = "$ACT" ] || [ "$ALT_SRC" = "$ACT" ]; then
+    KV="$KV_ALT"
+    KV_SOURCE="$KV_SOURCE + KMI in prefix"
+    BASE_NONE="$(run_rel "$STOCK_SCRIPT" none "$KV")"
+    BASE_SRC="$(run_rel "$STOCK_SCRIPT" source "$KV")"
+    PRED_NONE="$ALT_NONE"
+    PRED_SRC="$ALT_SRC"
+    if [ "$PRED_NONE" = "$ACT" ]; then MODE=none; else MODE=source; fi
+  fi
+fi
 
 KMI_COUNT=0
 if [ -n "$expected_kmi" ]; then
@@ -203,24 +267,27 @@ emit() {   # $1 = stock version, $2 = stock suffix, $3 = verified
   } >> "$GITHUB_OUTPUT"
 }
 
-MODE=""
-if [ "$PRED_NONE" = "$ACT" ]; then
-  MODE=none
-elif [ "$PRED_SRC" = "$ACT" ]; then
-  MODE=source
-fi
-
 if [ -z "$MODE" ]; then
-  note "  stock (no git)   : ${BASE_NONE:-<empty>}"
-  note "  new   (no git)   : ${PRED_NONE:-<empty>}"
-  note "  stock (git)      : ${BASE_SRC:-<empty>}"
-  note "  new   (git)      : ${PRED_SRC:-<empty>}"
+  note "  prefix tried      : ${KV}  (${KV_SOURCE})"
+  note "  stock (no git)    : ${BASE_NONE:-<empty>}"
+  note "  new   (no git)    : ${PRED_NONE:-<empty>}"
+  note "  stock (git)       : ${BASE_SRC:-<empty>}"
+  note "  new   (git)       : ${PRED_SRC:-<empty>}"
+  # The suffix is prefix-free, so a dropped or rewritten suffix is still
+  # detectable even when the prefix cannot be reproduced.
+  STOCK_SUFFIX_RAW="$(split_rel "$BASE_NONE" "$KV")"
+  case "$ACT" in
+    *"$STOCK_SUFFIX_RAW") ;;
+    *) fail "the built version '${ACT}' does not end with the stock suffix '${STOCK_SUFFIX_RAW}'" ;;
+  esac
   fail "the built version '${ACT}' matches neither what the rewritten script emits without git ('${PRED_NONE}') nor with git ('${PRED_SRC}'); a later build stage changed the version string."
-  emit "" "" false
+  emit "" "${STOCK_SUFFIX_RAW}" false
   exit 1
 fi
 
 if [ "$MODE" = none ]; then BASE="$BASE_NONE"; PRED="$PRED_NONE"; else BASE="$BASE_SRC"; PRED="$PRED_SRC"; fi
+STOCK_SUFFIX="$(split_rel "$BASE" "$KV")"
+NEW_SUFFIX="$(split_rel "$PRED" "$KV")"
 
 # Strip exactly what this run inserted, nothing else. merge rewrote
 # -android15 into -android15-8 in place; the value tokens are recorded.
@@ -237,18 +304,20 @@ strip_tokens() {
   printf '%s' "$s"
 }
 
-STRIPPED="$(strip_tokens "$PRED")"
-STOCK_SUFFIX="${BASE#"$kernel_version"}"
+STRIPPED="$(strip_tokens "$NEW_SUFFIX")"
 
-[ "$STRIPPED" = "$BASE" ] || fail "the rewritten script changes more than the inserted tokens: stock='${BASE}' new-without-tokens='${STRIPPED}'"
-
-if [ "$keep_kmi" = true ] && [ -n "$expected_kmi" ] && [ "$KMI_COUNT" -ne 1 ]; then
-  fail "expected exactly one '${expected_kmi}' in '${ACT}', found ${KMI_COUNT}"
-fi
+[ "$STRIPPED" = "$STOCK_SUFFIX" ] || fail "the rewritten script changes the suffix beyond the inserted tokens: stock='${STOCK_SUFFIX}' new-without-tokens='${STRIPPED}'"
+case "$ACT" in
+  *"$STOCK_SUFFIX") ;;
+  *) fail "the built version '${ACT}' does not end with the stock suffix '${STOCK_SUFFIX}'" ;;
+esac
 case "$ACT" in
   "$kernel_version"*) ;;
   *) fail "the built version '${ACT}' does not start with the kernel version '${kernel_version}'" ;;
 esac
+if [ "$keep_kmi" = true ] && [ -n "$expected_kmi" ] && [ "$KMI_COUNT" -ne 1 ]; then
+  fail "expected exactly one '${expected_kmi}' in '${ACT}', found ${KMI_COUNT}"
+fi
 if [ -n "$brand_suffix" ]; then
   case "$ACT" in
     *"$brand_suffix") ;;
@@ -257,7 +326,7 @@ if [ -n "$brand_suffix" ]; then
 fi
 
 # The version right after the KMI edit, i.e. before the brand was appended.
-AFTER_KMI="$PRED"
+AFTER_KMI="${PRED}"
 if [ -n "$brand_suffix" ]; then AFTER_KMI="${PRED%"$brand_suffix"}"; fi
 
 KMI_VERDICT="not-requested"
@@ -275,6 +344,7 @@ note "[5] KMI verification               : ${KMI_VERDICT}  (status=${kmi_status}
 note "    image                          : ${IMG:-<none>}"
 note "    kernel.release                 : ${KREL:-<none>}"
 note "    config used for the baseline   : ${CONFIG_SOURCE}"
+note "    version prefix                 : ${KV}  (from: ${KV_SOURCE})"
 note "    git visibility that matched    : ${MODE}"
 note "    script modified                : ${modified}"
 note "==============================================================="
@@ -290,6 +360,7 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     echo "| [3] version in the built Image | \`${ACT}\` |"
     echo "| [4] original long suffix | \`${STOCK_SUFFIX:-<none>}\` |"
     echo "| [5] KMI verification | \`${KMI_VERDICT}\` |"
+    echo "| version prefix | \`${KV}\` (\`${KV_SOURCE}\`) |"
     echo "| git visibility | \`${MODE}\` |"
     echo "| branding modified the script | \`${modified}\` |"
     echo

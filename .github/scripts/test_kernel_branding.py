@@ -691,6 +691,37 @@ def case_t13f(tmp: Path) -> None:
     check_eq("T13f stock_version has no -dirty", out.get("stock_version", ""), built)
 
 
+def case_t13g(tmp: Path) -> None:
+    print("\n--- T13g real layout: the KMI is part of the version prefix Kleaf passes")
+    tree = new_tree(tmp, "t13g", kind="kleaf", sublevel="143")
+    run_action(tree, "", True)
+    # Kleaf's make environment folds the KMI into KERNELVERSION, so the tree's
+    # own build already emits -android15-8 and the guard inserts nothing.
+    envdir = tree.workspace / "kernel/bazel-bin/common/kernel_aarch64_env"
+    envdir.mkdir(parents=True, exist_ok=True)
+    (envdir / "kernel_env").write_text("KERNELVERSION=6.6.143-android15-8\nLOCALVERSION=\n")
+    fake_build_output(tree, "6.6.143-android15-8-4k")
+    rc, out, log = run_verifier(tree)
+    check_eq("T13g exit", str(rc), "0")
+    check_eq("T13g built_version", out.get("built_version", ""), "6.6.143-android15-8-4k")
+    check_eq("T13g stock_version", out.get("stock_version", ""), "6.6.143-android15-8-4k")
+    check_eq("T13g stock_suffix", out.get("stock_suffix", ""), "-4k")
+    check_eq("T13g kmi_count", out.get("kmi_count", ""), "1")
+    check_re("T13g prefix comes from the Kleaf env", log, r"version prefix\s+: 6\.6\.143-android15-8")
+
+    print("\n--- T13h same layout, artifact lost the page-size suffix")
+    tree = new_tree(tmp, "t13h", kind="kleaf", sublevel="143")
+    run_action(tree, "", True)
+    envdir = tree.workspace / "kernel/bazel-bin/common/kernel_aarch64_env"
+    envdir.mkdir(parents=True, exist_ok=True)
+    (envdir / "kernel_env").write_text("KERNELVERSION=6.6.143-android15-8\nLOCALVERSION=\n")
+    fake_build_output(tree, "6.6.143-android15-8")
+    rc, out, log = run_verifier(tree)
+    check_eq("T13h exit non-zero", str(rc), "1")
+    check_eq("T13h verified=false", out.get("verified", ""), "false")
+    check_re("T13h names the mismatch", log, r"matches neither|does not end with the stock suffix")
+
+
 def case_static() -> None:
     print("\n--- Static contract of the action")
     run, data = extract_action()
@@ -731,7 +762,7 @@ def main() -> int:
         tmp = Path(td)
         for fn in (case_t1, case_t2, case_t2b, case_t3, case_t4, case_t5,
                    case_t6, case_t7, case_t7c, case_t8, case_t8c, case_t9,
-                   case_t10, case_t11, case_t12, case_t13, case_t13f):
+                   case_t10, case_t11, case_t12, case_t13, case_t13f, case_t13g):
             fn(tmp)
 
     print()
