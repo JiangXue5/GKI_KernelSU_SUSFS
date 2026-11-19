@@ -621,7 +621,10 @@ def case_t13(tmp: Path) -> None:
     rc, out, log = run_verifier(tree)
     check_eq("T13 verifier exit", str(rc), "0")
     check_eq("T13 built_version", out.get("built_version", ""), "6.6.143-android15-8-4k")
-    check_eq("T13 stock_version", out.get("stock_version", ""), "6.6.143-4k")
+    # This tree declares KMI_GENERATION, so the GKI layout applies: the build
+    # supplies "6.6.143-android15-8" and the suffix is only "-4k", i.e. the
+    # stock release already carries the KMI and the action added nothing.
+    check_eq("T13 stock_version", out.get("stock_version", ""), "6.6.143-android15-8-4k")
     check_eq("T13 stock_suffix", out.get("stock_suffix", ""), "-4k")
     check_eq("T13 kmi_count", out.get("kmi_count", ""), "1")
     check_eq("T13 verified", out.get("verified", ""), "true")

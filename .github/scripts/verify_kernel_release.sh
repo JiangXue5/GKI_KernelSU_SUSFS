@@ -146,36 +146,43 @@ AUTOCONF="$(make_autoconf "$CFG_SOURCE")"
 CONFIG_SOURCE="$CFG_SOURCE"
 
 # -------------------------------------------------------- version prefix -----
-# The build system may fold the KMI generation into the version prefix it hands
-# to setlocalversion (that is how "6.6.143-android15-8-4k" is produced here),
-# so the prefix cannot be assumed to be the plain kernel version. Kleaf writes
-# the make environment it uses; read it from there when it is available.
-KV=""
-KV_SOURCE=""
+# The version prefix handed to setlocalversion is not necessarily the plain
+# kernel version: GKI defines the kernel release as
+# w.x.y-androidZZ-k-suffix, so the build supplies "6.6.143-android15-8" and
+# scripts/setlocalversion only appends what follows it. 5.10/6.1 instead let
+# the script produce the KMI itself. Both shapes are tried, most faithful
+# first, and the one that reproduces the artifact wins.
+KV_ENV=""
+KV_ENV_SOURCE=""
 read_env_kv() {
   local f="$1" v
   [ -f "$f" ] || return 1
   v="$(sed -n 's/^KERNELVERSION=//p' "$f" 2>/dev/null | head -n 1 | tr -d "\"'")"
   [ -n "$v" ] || return 1
-  KV="$v"
-  KV_SOURCE="$f"
+  KV_ENV="$v"
+  KV_ENV_SOURCE="$f"
   return 0
 }
-ENV_CANDIDATES=""
 for f in \
   "$WORKSPACE/kernel/bazel-bin/common/kernel_aarch64_env/kernel_env" \
   "$WORKSPACE/kernel/bazel-bin/common/kernel_aarch64/out_dir/.kernel_env" \
   "/home/runner/out/.kernel_env"; do
   read_env_kv "$f" && break
 done
-if [ -z "$KV" ] && [ -d "$WORKSPACE/kernel/bazel-bin/common" ]; then
-  ENV_CANDIDATES="$(find "$WORKSPACE/kernel/bazel-bin/common" -maxdepth 3 -type f \
-    \( -name 'kernel_env' -o -name '.kernel_env' \) 2>/dev/null | head -n 5)"
-  for f in $ENV_CANDIDATES; do read_env_kv "$f" && break; done
+if [ -z "$KV_ENV" ] && [ -d "$WORKSPACE/kernel/bazel-bin/common" ]; then
+  for f in $(find "$WORKSPACE/kernel/bazel-bin/common" -maxdepth 3 -type f \
+      \( -name 'kernel_env' -o -name '.kernel_env' \) 2>/dev/null | head -n 5); do
+    read_env_kv "$f" && break
+  done
 fi
-if [ -z "$KV" ]; then
-  KV="$kernel_version"
-  KV_SOURCE="fallback (no Kleaf kernel_env found)"
+
+ANDROID_TOKEN=""
+case "$branch" in
+  android[0-9]*) ANDROID_TOKEN="${branch%%-*}" ;;
+esac
+KV_KMI=""
+if [ "$format" = full ] && [ -n "$ANDROID_TOKEN" ] && [ -n "$kmi_generation" ]; then
+  KV_KMI="${kernel_version}-${ANDROID_TOKEN}-${kmi_generation}"
 fi
 
 # --------------------------------------------------------------- baselines ---
@@ -220,32 +227,39 @@ split_rel() {   # $1 = full release, $2 = version prefix -> suffix
   esac
 }
 
-BASE_NONE="$(run_rel "$STOCK_SCRIPT" none "$KV")"
-PRED_NONE="$(run_rel "$INTREE_SCRIPT" none "$KV")"
-BASE_SRC="$(run_rel "$STOCK_SCRIPT" source "$KV")"
-PRED_SRC="$(run_rel "$INTREE_SCRIPT" source "$KV")"
+CANDIDATES=""
+[ -n "$KV_ENV" ] && CANDIDATES="$KV_ENV"
+[ -n "$KV_KMI" ] && CANDIDATES="$CANDIDATES $KV_KMI"
+CANDIDATES="$CANDIDATES $kernel_version"
+[ -n "$expected_kmi" ] && CANDIDATES="$CANDIDATES ${kernel_version}${expected_kmi}"
 
+KV=""
+KV_SOURCE=""
 MODE=""
-if [ "$PRED_NONE" = "$ACT" ]; then
-  MODE=none
-elif [ "$PRED_SRC" = "$ACT" ]; then
-  MODE=source
-fi
+TRIED=""
+for cand in $CANDIDATES; do
+  BASE_NONE="$(run_rel "$STOCK_SCRIPT" none "$cand")"
+  PRED_NONE="$(run_rel "$INTREE_SCRIPT" none "$cand")"
+  BASE_SRC="$(run_rel "$STOCK_SCRIPT" source "$cand")"
+  PRED_SRC="$(run_rel "$INTREE_SCRIPT" source "$cand")"
+  TRIED="$TRIED $cand"
+  if [ "$PRED_NONE" = "$ACT" ]; then MODE=none; KV="$cand"; break; fi
+  if [ "$PRED_SRC" = "$ACT" ]; then MODE=source; KV="$cand"; break; fi
+done
 
-if [ -z "$MODE" ] && [ -n "$expected_kmi" ] && [ "$KV" = "$kernel_version" ]; then
-  # The prefix may already carry the KMI generation; retry once with it.
-  KV_ALT="${kernel_version}${expected_kmi}"
-  ALT_NONE="$(run_rel "$INTREE_SCRIPT" none "$KV_ALT")"
-  ALT_SRC="$(run_rel "$INTREE_SCRIPT" source "$KV_ALT")"
-  if [ "$ALT_NONE" = "$ACT" ] || [ "$ALT_SRC" = "$ACT" ]; then
-    KV="$KV_ALT"
-    KV_SOURCE="$KV_SOURCE + KMI in prefix"
-    BASE_NONE="$(run_rel "$STOCK_SCRIPT" none "$KV")"
-    BASE_SRC="$(run_rel "$STOCK_SCRIPT" source "$KV")"
-    PRED_NONE="$ALT_NONE"
-    PRED_SRC="$ALT_SRC"
-    if [ "$PRED_NONE" = "$ACT" ]; then MODE=none; else MODE=source; fi
+if [ -n "$KV" ]; then
+  if [ -n "$KV_ENV" ] && [ "$KV" = "$KV_ENV" ]; then
+    KV_SOURCE="$KV_ENV_SOURCE"
+  elif [ "$KV" = "$kernel_version" ]; then
+    KV_SOURCE="kernel version (setlocalversion adds the KMI)"
+  elif [ -n "$KV_KMI" ] && [ "$KV" = "$KV_KMI" ]; then
+    KV_SOURCE="GKI release layout: kernel version + KMI generation"
+  else
+    KV_SOURCE="kernel version + KMI generation"
   fi
+else
+  KV="$kernel_version"
+  KV_SOURCE="none matched (tried:${TRIED})"
 fi
 
 KMI_COUNT=0
