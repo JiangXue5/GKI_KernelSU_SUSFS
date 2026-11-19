@@ -36,6 +36,11 @@ def read(path):
         return fh.read()
 
 
+def read_opt(path):
+    """Empty string when the file is not in this tree (fixtures, other gens)."""
+    return read(path) if os.path.exists(path) else ""
+
+
 def need(text, needle, what):
     if needle in text:
         ok(what)
@@ -173,6 +178,32 @@ def family_66(sched_h, fair, variant):
         fail(f"sysctl_sched_base_slice exported {exports} times (want 1)")
 
 
+def abi_surface(root, fair, sched_h):
+    """Two declaration-level ABI leaks that no KABI slot can absorb."""
+    fc = read(fair)
+    feats = read_opt(os.path.join(root, "kernel/sched/features.h"))
+    sh = read_opt(sched_h)
+
+    if re.search(r"\bsched_feat\(\s*PLACE_REL_DEADLINE\s*\)", fc):
+        fail("fair.c still gates on sched_feat(PLACE_REL_DEADLINE): a "
+             "SCHED_FEAT entry grows the exported sched_feat_keys[]/"
+             "sched_feat_names[], whose type is the array length")
+    elif "SCHED_FEAT(PLACE_REL_DEADLINE" in feats:
+        fail("features.h still declares SCHED_FEAT(PLACE_REL_DEADLINE): it "
+             "changes the size - and therefore the CRC - of two exported "
+             "arrays")
+    else:
+        ok("PLACE_REL_DEADLINE is a compile-time constant (exports unchanged)")
+
+    leak = re.compile(r"__read_mostly[ \t]+uint[ \t]+sysctl_sched_base_slice")
+    if leak.search(fc) or leak.search(sh):
+        fail("sysctl_sched_base_slice is re-declared __read_mostly uint: "
+             "genksyms keeps the declaration and its attributes, so an "
+             "exported symbol whose type never changed still moves its CRC")
+    else:
+        ok("sysctl_sched_base_slice keeps its stock declaration")
+
+
 def family_612(sched_h, fair):
     sh = read(sched_h)
     fc = read(fair)
@@ -207,6 +238,8 @@ def main():
             print("bore-check: FATAL --fair required for 6.6", file=sys.stderr)
             return 2
         family_66(args.sched_h, args.fair, args.variant)
+        abi_surface(args.root, args.fair,
+                    os.path.join(args.root, "kernel/sched/sched.h"))
     elif args.family in ("6.12", "6.18"):
         if not args.fair or not os.path.exists(args.fair):
             print("bore-check: FATAL --fair required for 6.12", file=sys.stderr)

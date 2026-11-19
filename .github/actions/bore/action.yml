@@ -496,6 +496,26 @@ runs:
         echo "=== repaired region (5.1.0 variant) ==="
         sed -n '/Minimal preemption granularity for CPU-bound tasks:/,/EXPORT_SYMBOL_GPL(sysctl_sched_base_slice)/p' kernel/sched/fair.c
 
+    - name: Make the exported-symbol surface stock again
+      shell: bash
+      working-directory: ${{ github.workspace }}/kernel/common
+      env:
+        KVER: ${{ inputs.kernel_version }}
+      run: |
+        set -euo pipefail
+        if [ "$KVER" != "6.6" ]; then
+          echo "Exported-symbol neutralisation is 6.6-only; skipping."
+          exit 0
+        fi
+        # Verified in run 44633908342: once the SYSVIPC patch stopped
+        # rewriting task_struct, the only drift left was three exported
+        # symbols whose DECLARATION the 5.9.6 patch changes -
+        # sched_feat_keys[]/sched_feat_names[] (their type is the array
+        # length) and sysctl_sched_base_slice (re-declared __read_mostly
+        # uint). genksyms keeps declarations and attributes, so both move
+        # the CRC even though BORE's scheduler state is KABI-neutral.
+        python3 "${{ github.workspace }}/.github/scripts/bore_abi_neutral.py" .
+
     - name: Repair a fuzz-spliced update_curr_bore block (6.12/6.18)
       shell: bash
       working-directory: ${{ github.workspace }}/kernel/common

@@ -426,6 +426,64 @@ def t6b_variant_510():
         shutil.rmtree(tmp)
 
 
+def t10_abi_surface():
+    """Exported declarations the patch changes must be folded back to stock."""
+    print("\n[T10] exported-symbol surface stays stock")
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        sched = tmp / "kernel/sched"
+        sched.mkdir(parents=True)
+        fair = sched / "fair.c"
+        fair.write_text(
+            "unsigned int sysctl_sched_min_base_slice = 2000000;\n"
+            "__read_mostly uint sysctl_sched_base_slice = nsecs_per_tick;\n"
+            "EXPORT_SYMBOL_GPL(sysctl_sched_base_slice);\n"
+            "static void f(struct sched_entity *se)\n"
+            "{\n"
+            "\tif (sched_feat(PLACE_REL_DEADLINE) && se->rel_deadline)\n"
+            "\t\t;\n"
+            "\tif (sched_feat(PLACE_REL_DEADLINE) && !sleep)\n"
+            "\t\t;\n"
+            "}\n")
+        (sched / "sched.h").write_text(
+            "extern __read_mostly uint sysctl_sched_base_slice;\n")
+        feats = sched / "features.h"
+        feats.write_text(
+            "SCHED_FEAT(PLACE_DEADLINE_INITIAL, true)\n"
+            "/*\n"
+            " * Preserve relative virtual deadline on 'migration'.\n"
+            " */\n"
+            "SCHED_FEAT(PLACE_REL_DEADLINE, true)\n")
+
+        r = run_py("bore_abi_neutral.py", ".", cwd=tmp)
+        check(r.returncode == 0, "the neutraliser succeeds on the patched shape")
+        body = fair.read_text()
+        check("unsigned int sysctl_sched_base_slice = nsecs_per_tick;" in body,
+              "base_slice loses __read_mostly (the CRC follows the attribute)")
+        check("__read_mostly uint" not in body, "no __read_mostly uint survives")
+        check("sched_feat(PLACE_REL_DEADLINE)" not in body,
+              "the feature gate is folded into the surrounding condition")
+        check("SCHED_FEAT(PLACE_REL_DEADLINE" not in feats.read_text(),
+              "the SCHED_FEAT entry is gone (array size unchanged)")
+        check("extern unsigned int sysctl_sched_base_slice;" in
+              (sched / "sched.h").read_text(), "the extern keeps stock text")
+
+        before = fair.read_text(), feats.read_text()
+        r = run_py("bore_abi_neutral.py", ".", cwd=tmp)
+        check(r.returncode == 0, "second run still succeeds")
+        check((fair.read_text(), feats.read_text()) == before,
+              "second run changes nothing (idempotent)")
+
+        # A shape the anchored rewriter cannot fold (different spelling).
+        feats.write_text(feats.read_text() +
+                         "SCHED_FEAT(PLACE_REL_DEADLINE,false)\n")
+        r = run_py("bore_abi_neutral.py", ".", cwd=tmp)
+        check(r.returncode != 0,
+              "a leftover SCHED_FEAT entry is a hard failure, not a warning")
+    finally:
+        shutil.rmtree(tmp)
+
+
 def t9_sysvipc_slots():
     """The 6.6 SYSVIPC fix must stay KABI-slot based for every build."""
     print("\n[T9] one SYSVIPC path, slots only")
@@ -541,6 +599,7 @@ def main():
     t4_sysctl_rewrite()
     t5_fail_loudly_on_drift()
     t6_bore_check()
+    t10_abi_surface()
     t9_sysvipc_slots()
     t6c_kmi_guard()
     t6b_variant_510()
