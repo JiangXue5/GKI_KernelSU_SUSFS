@@ -498,8 +498,11 @@ jobs:
           fi
           echo "[ok] KSU_VERSION_FULL in image : $KSU_VERSION_FULL"
 
-          CMD_HIT="$(grep -rIl --include='*.cmd' -m1 -- "-DKSU_VERSION=${KSU_VERSION}" \
-            "$GITHUB_WORKSPACE/kernel" 2>/dev/null | head -n 1 || true)"
+          # Bounded: the tree can hold tens of thousands of .cmd files and a
+          # full-tree grep would add minutes to every build for a warning-only
+          # check. Kleaf's output tree is where the kernelsu objects live.
+          CMD_HIT="$(timeout 90 grep -rIl --include='*.cmd' -m1 -- "-DKSU_VERSION=${KSU_VERSION}" \
+            "$GITHUB_WORKSPACE/kernel/bazel-bin" "$GITHUB_WORKSPACE/kernel/out" 2>/dev/null | head -n 1 || true)"
           if [ -n "$CMD_HIT" ]; then
             echo "[ok] KSU_VERSION in compile flags: ${KSU_VERSION} (${CMD_HIT#"$GITHUB_WORKSPACE"/})"
           else
