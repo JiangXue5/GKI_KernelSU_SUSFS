@@ -609,11 +609,25 @@ runs:
     - name: Enable CONFIG_SCHED_BORE
       shell: bash
       working-directory: ${{ github.workspace }}/kernel/common
+      env:
+        VARIANT: ${{ inputs.variant }}
       run: |
         set -euo pipefail
-        # Same fragment the rest of the build uses; verify-fragment checks it
-        # against the resolved .config after the build, so a missing Kconfig
-        # entry (patch not applied) fails there instead of shipping silently.
+        # Same fragment mechanism the rest of the build uses; verify-fragment
+        # checks it against the resolved .config after the build, so a missing
+        # Kconfig entry (patch not applied) fails there instead of shipping
+        # silently.
+        #
+        # MIN_BASE_SLICE_NS is a 5.9.x knob: the 5.1.0 patch adds no such
+        # Kconfig entry, and Kleaf's fragment check aborts the whole config
+        # ("CONFIG_MIN_BASE_SLICE_NS: actual '', expected '...=2000000'",
+        # run 44570273819) if we ask for it anyway. So the generation decides
+        # which fragment is appended - both are reviewed files, not shell
+        # one-liners.
+        FRAGMENT="${{ github.workspace }}/.github/fragments/enable-bore.fragment"
+        if [ "${VARIANT}" = "5.1.0" ]; then
+          FRAGMENT="${{ github.workspace }}/.github/fragments/enable-bore-510.fragment"
+        fi
+        echo "BORE fragment: $(basename "$FRAGMENT")"
         python3 "${{ github.workspace }}/.github/scripts/append_fragment.py" \
-          "${{ github.workspace }}/.github/fragments/enable-bore.fragment" \
-          --dest wild_defconfig.fragment --label enable-bore
+          "$FRAGMENT" --dest wild_defconfig.fragment --label enable-bore

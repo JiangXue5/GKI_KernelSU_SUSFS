@@ -466,6 +466,15 @@ def t7_workflow_wiring():
     check("CONFIG_SCHED_BORE=y" in body, "fragment enables the scheduler")
     check("CONFIG_MIN_BASE_SLICE_NS=2000000" in body, "fragment sets the slice")
 
+    frag510 = ROOT / ".github/fragments/enable-bore-510.fragment"
+    body510 = frag510.read_text() if frag510.is_file() else ""
+    check("CONFIG_SCHED_BORE=y" in body510,
+          "the 5.1.0 fragment enables the scheduler")
+    check("CONFIG_MIN_BASE_SLICE_NS" not in body510,
+          "the 5.1.0 fragment asks for no 5.9.x-only Kconfig entry")
+    check('"${VARIANT}" = "5.1.0"' in act and "enable-bore-510.fragment" in act,
+          "the action picks the fragment by generation")
+
     check("append_fragment.py" in act,
           "BORE uses the shared fragment mechanism")
     check("set-kernel-config" not in act,
