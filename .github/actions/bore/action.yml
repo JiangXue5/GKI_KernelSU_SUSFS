@@ -172,6 +172,9 @@ runs:
     - name: Verify BORE patch provenance
       id: verify
       shell: bash
+      env:
+        VARIANT: ${{ inputs.variant }}
+        KVER: ${{ inputs.kernel_version }}
       run: |
         set -euo pipefail
         PATCH="${{ github.workspace }}/kernel_patches/bore/0001-bore.patch"
@@ -199,7 +202,19 @@ runs:
         fi
 
         BORE_VER=$(sed -n 's/^+#define SCHED_BORE_VERSION "\(.*\)"$/\1/p' "$PATCH" | head -1)
-        [ -n "$BORE_VER" ] || { echo "ERROR: SCHED_BORE_VERSION not found in the patch" >&2; exit 1; }
+        if [ -z "$BORE_VER" ]; then
+          # 5.1.0 predates the macro (it is a 5.9.x-era addition), so for the
+          # vendored 6.6/5.1.0 pair the REQUESTED generation is the label.
+          # Everything else still has to prove itself: an upstream patch that
+          # lost the macro is a provenance failure, not a naming problem.
+          if [ "${KVER}" = "6.6" ] && [ "${VARIANT}" = "5.1.0" ]; then
+            BORE_VER="5.1.0"
+            echo "BORE version: 5.1.0 (requested generation; the 5.1.0 patch predates SCHED_BORE_VERSION)"
+          else
+            echo "ERROR: SCHED_BORE_VERSION not found in the patch" >&2
+            exit 1
+          fi
+        fi
         SHA=$(sha256sum "$PATCH" | cut -d' ' -f1)
         echo "BORE version: ${BORE_VER}"
         echo "BORE patch sha256: ${SHA}"

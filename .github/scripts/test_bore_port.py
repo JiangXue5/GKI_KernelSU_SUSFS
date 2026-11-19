@@ -389,7 +389,7 @@ def t6c_kmi_guard():
                    "--sched-h", "include/linux/sched.h",
                    "--fair", "kernel/sched/fair.c", "--root", ".", cwd=tmp)
         check(r.returncode != 0, "a narrow on_rq fails the check")
-        check("on_rq" in r.stdout and "stock declaration" in r.stdout,
+        check("on_rq is not the stock" in r.stdout,
               "the failure names the KMI reason")
     finally:
         shutil.rmtree(tmp)
@@ -473,6 +473,10 @@ def t7_workflow_wiring():
     check("--forward" in act, "patch is applied idempotently")
     check("refusing to continue" in act,
           "an unsupported kernel version is a hard error, not a skip")
+    check("SCHED_BORE_VERSION not found in the patch" in act,
+          "a patch without the version macro is still rejected")
+    check('BORE_VER="5.1.0"' in act,
+          "the 5.1.0 generation is labelled from the requested variant")
     check("kernel/sched/fair.c.rej" in act,
           "only the known sysctl reject is tolerated")
     check("bore_check.py" in act, "the action verifies the result, not the exit code")
