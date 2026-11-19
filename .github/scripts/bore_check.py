@@ -94,15 +94,15 @@ def family_66(sched_h, fair, variant):
     sh = read(sched_h)
     fc = read(fair)
 
-    need(sh, "struct sched_burst_cache {", "burst cache type present")
-
     if variant == "5.1.0":
+        # 5.1.0 keeps its state in sched_entity scalars (no cache type, no
+        # nsecs_per_tick): bore66_510.py flattens the scalars into slots 1-4.
         need(sh, "bore-kabi: burst_", "5.1.0 KABI relocation marker")
         need(fc, "configured_sched_base_slice", "configured base slice declared")
-        # The 5.1.0 generation keeps its state in sched_entity scalars only.
         if "struct bore_ctx" in sh:
             fail("unexpected bore_ctx in the 5.1.0 generation")
     else:
+        need(sh, "struct sched_burst_cache {", "burst cache type present")
         # The upstream patch adds ONE inline `child_burst` member to
         # sched_entity. The relocation removes it and re-adds a same-named
         # payload inside a KABI replace, under the marker. So the marker plus
@@ -119,8 +119,9 @@ def family_66(sched_h, fair, variant):
             else:
                 fail(f"child_burst member appears {n} times (want 1: the "
                      f"inline copy should have been removed)")
+        need(fc, "static const unsigned int nsecs_per_tick",
+             "nsecs_per_tick declared")
 
-    need(fc, "static const unsigned int nsecs_per_tick", "nsecs_per_tick declared")
     need(fc, "sysctl_sched_min_base_slice", "min_base_slice declared")
     need(fc, "curr->burst_time += delta_exec;", "update_curr accounts burst time")
     need(fc, "#ifdef CONFIG_SCHED_BORE", "BORE arms present in fair.c")

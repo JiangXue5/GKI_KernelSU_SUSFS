@@ -350,6 +350,37 @@ def t6_bore_check():
         shutil.rmtree(tmp)
 
 
+def t6b_variant_510():
+    print("\n[T6b] the 5.1.0 generation is checked with its own invariants")
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        write_tree(tmp)
+        sh = tmp / "include/linux/sched.h"
+        fc = tmp / "kernel/sched/fair.c"
+        # 5.1.0 shape: scalars in the slots, no cache type, configured_ slice.
+        sh.write_text(SCHED_H.replace(
+            """#ifdef CONFIG_SCHED_BORE
+\tu64\t\t\t\tburst_time;""",
+            """\t/* bore-kabi: burst_ flat payload */
+\t_ANDROID_KABI_REPLACE(ANDROID_KABI_RESERVE(1); ANDROID_KABI_RESERVE(2),
+\t\tstruct { u64 burst_time; });
+#ifdef CONFIG_SCHED_BORE
+\tu64\t\t\t\tburst_time;"""))
+        fc.write_text(FAIR_STOCK.replace(
+            "static unsigned int normalized_sysctl_sched_base_slice",
+            "static unsigned int configured_sched_base_slice = 1000000000ULL / HZ;\n"
+            "unsigned int sysctl_sched_min_base_slice = 2000000ULL;\n"
+            "static unsigned int normalized_sysctl_sched_base_slice"))
+        r = run_py("bore_check.py", "--family", "6.6", "--variant", "5.1.0",
+                   "--sched-h", "include/linux/sched.h",
+                   "--fair", "kernel/sched/fair.c", "--root", ".", cwd=tmp)
+        check(r.returncode == 0, "5.1.0 invariants accept the scalar layout")
+        check("nsecs_per_tick" not in r.stdout,
+              "5.1.0 is not asked for the 5.9.6-only symbol")
+    finally:
+        shutil.rmtree(tmp)
+
+
 def t7_workflow_wiring():
     print("\n[T7] build wiring")
     build = (ROOT / ".github/workflows/build.yml").read_text()
@@ -426,6 +457,7 @@ def main():
     t4_sysctl_rewrite()
     t5_fail_loudly_on_drift()
     t6_bore_check()
+    t6b_variant_510()
     t7_workflow_wiring()
     t8_no_collateral()
     print()
