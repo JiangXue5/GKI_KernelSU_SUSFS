@@ -361,6 +361,14 @@ runs:
         # accessors that change owner. No heap pointer, no fork/exit hooks -
         # the caches stay plain struct memory, copied by dup_task_struct and
         # re-initialized by the patch's own spin_lock_init hook.
+        #
+        # It also puts `unsigned int on_rq;` back: the patch narrows it to u8
+        # and spends the freed byte on rel_deadline, which is layout-neutral
+        # but NOT genksyms-neutral - the CRC is hashed from the declaration
+        # text, and every exported symbol that reaches sched_entity inherits
+        # it. Run 44555422806 measured 6144 of 9562 stock CRCs moved that
+        # way, so rel_deadline now rides in the slot payload instead and the
+        # sched_entity text stays byte-identical to stock.
         if ! grep -q 'struct sched_burst_cache child_burst;' include/linux/sched.h 2>/dev/null; then
           echo "No inline sched_entity burst fields (5.1.0/7.x generation); nothing to do."
           exit 0

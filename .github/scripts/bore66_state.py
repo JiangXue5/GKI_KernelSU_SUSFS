@@ -14,9 +14,11 @@ consecutive reserves, exactly their SYSVIPC shape) and lays the state FLAT
 across the structs' own free KABI reserves, DS-combo edition:
 
   1. struct sched_entity, RESERVE(1)+RESERVE(2) merged:
-     burst_time (u64) + the four u8 penalty/score fields as an ANONYMOUS
-     payload - the patch's own `se->burst_time`-style accessors compile
-     UNCHANGED through the anonymous union nesting.
+     burst_time (u64) + the four u8 penalty/score fields + rel_deadline as an
+     ANONYMOUS payload - the patch's own `se->burst_time`-style accessors
+     compile UNCHANGED through the anonymous union nesting. The patch's own
+     on_rq narrowing (unsigned int -> unsigned char + a sibling
+     rel_deadline) is REVERTED first: see SE_ONRQ_* below.
   2. struct sched_entity, RESERVE(3)+RESERVE(4) merged: child_burst as a
      NAMED `struct sched_burst_cache child_burst;` payload (the def is
      packed to 16 bytes first, so it fits). bore66_flat.py leaves every
@@ -56,6 +58,24 @@ import re
 import sys
 
 MARK = "/* bore-kabi: 6.6 burst state in KABI slots (DroidSpaces method) */"
+
+# BORE 5.9.6 ALSO narrows on_rq from unsigned int to unsigned char and spends
+# the freed bytes on a sibling rel_deadline byte. Layout-wise that is a no-op
+# (exec_start stays 8-aligned, the struct keeps its size) but genksyms hashes
+# the DECLARATION TEXT, and on_rq is a member of the one struct every sched
+# user mentions: keeping it moves the CRC of every exported symbol whose type
+# reaches sched_entity/task_struct. Measured on the real 6.6.143 build (run
+# 44555422806): 6144 of 9562 stock CRCs differed, i.e. the KMI gate failed on
+# a port that was supposed to be layout-neutral. So restore the stock
+# declaration VERBATIM and carry rel_deadline inside the KABI payload below
+# (_ANDROID_KABI_REPLACE is compiled away for genksyms, see
+# include/linux/android_kabi.h). text-identical + layout-identical = CRC
+# identical.
+SE_ONRQ_OLD = (
+    "\tunsigned char\t\t\ton_rq;\n"
+    "\tunsigned char\t\t\trel_deadline;\n"
+)
+SE_ONRQ_NEW = "\tunsigned int\t\t\ton_rq;\n"
 
 # The patch's inline sched_entity burst block (removed: it shifts SE's KMI).
 SE_FIELDS_OLD = (
@@ -222,6 +242,24 @@ def process(path: str) -> bool:
         src = src.replace(struct_def_old, struct_def_new, 1)
         print(f"bore66-state: {path}: sched_burst_cache packed to 16 bytes")
 
+    # Restore the stock on_rq declaration (see SE_ONRQ_* above) BEFORE any
+    # offset is taken: this edit changes the text length above the reserves.
+    if SE_ONRQ_OLD in src:
+        src = src.replace(SE_ONRQ_OLD, SE_ONRQ_NEW, 1)
+        print(f"bore66-state: {path}: on_rq restored to 'unsigned int' "
+              f"(rel_deadline moves into the SE slots)")
+    elif SE_ONRQ_NEW in src:
+        pass  # already normalised by an earlier run
+    else:
+        # A BORE generation without the on_rq narrowing is fine; a tree that
+        # narrowed it some OTHER way is not - refuse rather than guess.
+        narrow = re.search(r"^\tunsigned char\s+on_rq;", src, re.M)
+        if narrow:
+            print(f"bore66-state: {path}: on_rq is narrow but the "
+                  f"rel_deadline pair is not the known 5.9.6 shape; "
+                  f"aborting", file=sys.stderr)
+            return False
+
     if SE_FIELDS_OLD not in src:
         print(f"bore66-state: {path}: inline sched_entity burst fields "
               f"absent (not the 5.9.6 6.6 shape); no edit")
@@ -272,6 +310,7 @@ def process(path: str) -> bool:
         "\t\t\tu8\tcurr_burst_penalty;\n"
         "\t\t\tu8\tburst_penalty;\n"
         "\t\t\tu8\tburst_score;\n"
+        "\t\t\tu8\trel_deadline;\n"
         "\t\t});\n"
         "\t_ANDROID_KABI_REPLACE(\n"
         "\t\tANDROID_KABI_RESERVE(3);\n"
@@ -279,8 +318,16 @@ def process(path: str) -> bool:
         "\t\tstruct sched_burst_cache child_burst;\n"
         "\t);\n"
         "#else\n"
-        "\tANDROID_KABI_RESERVE(1);\n"
-        "\tANDROID_KABI_RESERVE(2);\n"
+        "\t/* the patch's own PLACE_REL_DEADLINE code runs even with BORE\n"
+        "\t * off, so the field has to exist either way - keep on_rq's\n"
+        "\t * stock type and hide it in slot 1+2 as well.\n"
+        "\t */\n"
+        "\t_ANDROID_KABI_REPLACE(\n"
+        "\t\tANDROID_KABI_RESERVE(1);\n"
+        "\t\tANDROID_KABI_RESERVE(2),\n"
+        "\t\tstruct {\n"
+        "\t\t\tu8\trel_deadline;\n"
+        "\t\t});\n"
         "\tANDROID_KABI_RESERVE(3);\n"
         "\tANDROID_KABI_RESERVE(4);\n"
         "#endif\n"
@@ -341,6 +388,10 @@ def process(path: str) -> bool:
             struct_def_new not in out,
         "inline burst fields still present":
             SE_FIELDS_OLD in out,
+        "on_rq left narrowed (KMI-visible type change survived)":
+            SE_ONRQ_OLD in out or SE_ONRQ_NEW not in out,
+        "rel_deadline not carried in the KABI payload":
+            "\t\t\tu8\trel_deadline;\n" not in out,
         "splice markers not exactly 2":
             out.count(MARK) != 2,
     }

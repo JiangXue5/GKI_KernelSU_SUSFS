@@ -552,6 +552,22 @@ jobs:
           version: ${{ inputs.version }}
           date: ${{ inputs.os_patch_level }}
 
+      - name: Capture the exported CRCs when the ABI gate fails
+        # A BORE build tripping the gate is answered with evidence, not a re-run:
+        # the artefact carries both sides of the comparison (our Module.symvers
+        # and the stock .stg the gate read), so the drift can be diffed offline
+        # instead of guessed at from a 40-symbol excerpt.
+        if: failure() && inputs.use_bore
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.extract.outputs.file_name }}-abi-evidence
+          path: |
+            ${{ github.workspace }}/kernel/bazel-bin/common/kernel_aarch64/Module.symvers
+            ${{ github.workspace }}/kernel/common/android/abi_gki_aarch64.stg
+          if-no-files-found: warn
+          retention-days: 5
+          compression-level: 9
+
       - name: Extract the built .config
         if: always()
         uses: ./.github/actions/extract-the-built-config

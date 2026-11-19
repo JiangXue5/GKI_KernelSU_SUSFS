@@ -119,6 +119,27 @@ def family_66(sched_h, fair, variant):
             else:
                 fail(f"child_burst member appears {n} times (want 1: the "
                      f"inline copy should have been removed)")
+            # KMI: the ONLY member BORE retypes is on_rq, which every sched
+            # user hashes - genksyms reads the declaration text, so a narrow
+            # on_rq moves 6000+ exported CRCs (run 44555422806). The port
+            # must keep the stock declaration and hide rel_deadline in the
+            # slots, which genksyms never sees (_ANDROID_KABI_REPLACE is
+            # compiled away under __GENKSYMS__).
+            if "\tunsigned int\t\t\ton_rq;\n" in sh:
+                ok("on_rq keeps its stock declaration (genksyms-neutral)")
+            else:
+                fail("on_rq is not the stock 'unsigned int on_rq;' - the "
+                     "BORE on_rq narrowing survived, which moves the CRC of "
+                     "every symbol that mentions sched_entity")
+            if re.search(r"^\tunsigned char\s+on_rq;", sh, re.M):
+                fail("a narrow on_rq declaration is still in sched_entity")
+            marker = sh.find("bore-kabi: 6.6 burst state")
+            if marker != -1 and re.search(r"\bu8\s+rel_deadline;",
+                                          sh[marker:]):
+                ok("rel_deadline carried in the sched_entity KABI payload")
+            else:
+                fail("rel_deadline is not in the KABI payload (it was "
+                     "dropped, or the splice did not run)")
         need(fc, "static const unsigned int nsecs_per_tick",
              "nsecs_per_tick declared")
 

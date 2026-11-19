@@ -60,6 +60,9 @@ struct sched_burst_cache {
 struct sched_entity {
 \tstruct load_weight\t\tload;
 \tstruct rb_node\t\t\trun_node;
+\tstruct list_head\t\tgroup_node;
+\tunsigned char\t\t\ton_rq;
+\tunsigned char\t\t\trel_deadline;
 \tu64\t\t\t\texec_start;
 #ifdef CONFIG_SCHED_BORE
 \tu64\t\t\t\tburst_time;
@@ -202,6 +205,15 @@ def t2_state_relocation():
               .split("struct sched_rt_entity")[0],
               "inline burst_time removed from sched_entity")
         check("_ANDROID_KABI_REPLACE" in sched, "KABI slots merged")
+        # KMI: on_rq must keep its stock declaration; rel_deadline moves into
+        # the slot payload, where genksyms cannot see it.
+        check("\tunsigned int\t\t\ton_rq;\n" in sched,
+              "on_rq restored to the stock 'unsigned int' declaration")
+        check("unsigned char\t\t\ton_rq;" not in sched,
+              "the narrow on_rq declaration is gone")
+        payload = sched.split("bore-kabi: 6.6 burst state")[1]
+        check("u8\trel_deadline;" in payload,
+              "rel_deadline carried inside the sched_entity KABI payload")
         check("ANDROID_KABI_RESERVE(6);" in sched,
               "task_struct slots 6-8 left for other features")
         check("struct sched_burst_cache {" in sched and
