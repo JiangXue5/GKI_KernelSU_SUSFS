@@ -586,7 +586,7 @@ def fake_build_output(tree: Tree, image_version: str,
     out.mkdir(parents=True, exist_ok=True)
     (out / ".config").write_text(
         "# Linux/arm64 %s Kernel Configuration\n"
-        "CONFIG_LOCALVERSION=%s\n"
+        "CONFIG_LOCALVERSION=\"%s\"\n"
         "CONFIG_LOCALVERSION_AUTO=y\n" % (tree.kernel_version, cfg_localversion))
     img_dir = tree.workspace / "kernel/bazel-bin/common/kernel_aarch64"
     img_dir.mkdir(parents=True, exist_ok=True)

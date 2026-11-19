@@ -121,19 +121,29 @@ for c in \
   if [ -f "$c" ]; then BUILT_CONFIG="$c"; break; fi
 done
 
-TMPCFG=""
-if [ -z "$AUTOCONF" ]; then
-  if [ -z "$BUILT_CONFIG" ]; then
-    fail "neither auto.conf nor .config found; the stock baseline cannot be computed."
-    exit 1
-  fi
-  TMPCFG="$(mktemp)"
+# The script only reads these two keys out of include/config/auto.conf. They
+# are copied from whatever the build produced, with the quoting of a .config
+# string value removed: a release string never carries the quotes, so the
+# effective value the build saw was the unquoted one, whether auto.conf stored
+# it quoted and the script stripped it, or not.
+make_autoconf() {   # $1 = file with the keys
+  local src="$1" out
+  out="$(mktemp)"
   {
-    grep -E '^CONFIG_LOCALVERSION=' "$BUILT_CONFIG" || true
-    grep -E '^CONFIG_LOCALVERSION_AUTO=' "$BUILT_CONFIG" || true
-  } > "$TMPCFG"
-  AUTOCONF="$TMPCFG"
+    grep -E '^CONFIG_LOCALVERSION=' "$src" | sed -E 's/^(CONFIG_LOCALVERSION)="(.*)"$/\1=\2/' || true
+    grep -E '^CONFIG_LOCALVERSION_AUTO=' "$src" || true
+  } > "$out"
+  printf '%s' "$out"
+}
+
+CFG_SOURCE="$AUTOCONF"
+if [ -z "$CFG_SOURCE" ]; then CFG_SOURCE="$BUILT_CONFIG"; fi
+if [ -z "$CFG_SOURCE" ]; then
+  fail "neither auto.conf nor .config found; the stock baseline cannot be computed."
+  exit 1
 fi
+AUTOCONF="$(make_autoconf "$CFG_SOURCE")"
+CONFIG_SOURCE="$CFG_SOURCE"
 
 # --------------------------------------------------------------- baselines ---
 # The script reads include/config/auto.conf from the working directory and the
@@ -264,7 +274,7 @@ note "[4] original long suffix           : ${STOCK_SUFFIX:-<none>}"
 note "[5] KMI verification               : ${KMI_VERDICT}  (status=${kmi_status}, count=${KMI_COUNT})"
 note "    image                          : ${IMG:-<none>}"
 note "    kernel.release                 : ${KREL:-<none>}"
-note "    config used for the baseline   : ${AUTOCONF}"
+note "    config used for the baseline   : ${CONFIG_SOURCE}"
 note "    git visibility that matched    : ${MODE}"
 note "    script modified                : ${modified}"
 note "==============================================================="
