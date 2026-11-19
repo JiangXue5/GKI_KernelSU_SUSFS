@@ -255,7 +255,12 @@ def t4_sysctl_rewrite():
         check(src.count("EXPORT_SYMBOL_GPL(sysctl_sched_base_slice);") == 1,
               "export kept exactly once, outside the ifdef")
         check("= 700000ULL;" in src, "GKI's own 700000ULL literal preserved")
-        check("__maybe_unused" in src, "normalized_ marked __maybe_unused")
+        # __maybe_unused is a declaration attribute: after the initializer the
+        # compiler reads it as a stray token ("expected ';' after top level
+        # declarator"), which is exactly how run 44551211243 died.
+        check(re.search(r"normalized_sysctl_sched_base_slice __maybe_unused = "
+                        r"\d+ULL;", src) is not None,
+              "normalized_ carries __maybe_unused before the initializer")
         check("SCHED_TUNABLESCALING_NONE" in src and
               "SCHED_TUNABLESCALING_LOG" in src,
               "both scaling defaults present behind the ifdef")

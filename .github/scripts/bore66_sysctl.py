@@ -154,7 +154,7 @@ __read_mostly uint sysctl_sched_base_slice = nsecs_per_tick;
 unsigned int sysctl_sched_base_slice = {stock};
 #endif // CONFIG_SCHED_BORE
 EXPORT_SYMBOL_GPL(sysctl_sched_base_slice);
-static unsigned int normalized_sysctl_sched_base_slice = {stock} __maybe_unused;
+static unsigned int normalized_sysctl_sched_base_slice __maybe_unused = {stock};
 """
 
     out = src[:region_start] + block + src[region_end:]
