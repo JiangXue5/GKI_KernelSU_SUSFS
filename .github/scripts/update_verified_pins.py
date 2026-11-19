@@ -23,7 +23,7 @@ PINS = [
     ("PIN_NOMOUNT", "NOMOUNT_SHA", "APPROVE_NOMOUNT"),
     ("PIN_KERNELSU", "KERNELSU_SHA", "APPROVE_KERNELSU"),
     ("PIN_BAKASU", "BAKASU_SHA", "APPROVE_BAKASU"),
-    ("PIN_SUKISU_ULTRA", "SUKISU_ULTRA_SHA", "APPROVE_SUKISU_ULTRA"),
+    ("PIN_SUKISU_NOVA", "SUKISU_NOVA_SHA", "APPROVE_SUKISU_NOVA"),
     ("PIN_FINASU", "FINASU_SHA", "APPROVE_FINASU"),
     # SUSFS is intentionally excluded: it is always resolved at latest so it
     # stays API-matched to the always-latest KernelSU-Next tree.

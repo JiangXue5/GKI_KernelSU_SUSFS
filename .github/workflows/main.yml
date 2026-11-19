@@ -68,6 +68,8 @@ on:
           - KernelSU-Next
           - KernelSU
           - BakaSU
+          - SukiSU Nova
+          # Legacy label kept so an older dispatch payload still resolves.
           - SukiSU-Ultra
           - KowSU
           - FinaSU
@@ -156,16 +158,16 @@ jobs:
       susfs_commit_android14_6_1_bakasu: ${{ steps.resolve.outputs.susfs_commit_android14_6_1_bakasu }}
       susfs_commit_android15_6_6_bakasu: ${{ steps.resolve.outputs.susfs_commit_android15_6_6_bakasu }}
       susfs_commit_android16_6_12_bakasu: ${{ steps.resolve.outputs.susfs_commit_android16_6_12_bakasu }}
-      susfs_commit_android12_5_10_sukisu_ultra: ${{ steps.resolve.outputs.susfs_commit_android12_5_10_sukisu_ultra }}
-      susfs_commit_android13_5_10_sukisu_ultra: ${{ steps.resolve.outputs.susfs_commit_android13_5_10_sukisu_ultra }}
-      susfs_commit_android13_5_15_sukisu_ultra: ${{ steps.resolve.outputs.susfs_commit_android13_5_15_sukisu_ultra }}
-      susfs_commit_android14_5_15_sukisu_ultra: ${{ steps.resolve.outputs.susfs_commit_android14_5_15_sukisu_ultra }}
-      susfs_commit_android14_6_1_sukisu_ultra: ${{ steps.resolve.outputs.susfs_commit_android14_6_1_sukisu_ultra }}
-      susfs_commit_android15_6_6_sukisu_ultra: ${{ steps.resolve.outputs.susfs_commit_android15_6_6_sukisu_ultra }}
-      susfs_commit_android16_6_12_sukisu_ultra: ${{ steps.resolve.outputs.susfs_commit_android16_6_12_sukisu_ultra }}
+      susfs_commit_android12_5_10_sukisu_nova: ${{ steps.resolve.outputs.susfs_commit_android12_5_10_sukisu_nova }}
+      susfs_commit_android13_5_10_sukisu_nova: ${{ steps.resolve.outputs.susfs_commit_android13_5_10_sukisu_nova }}
+      susfs_commit_android13_5_15_sukisu_nova: ${{ steps.resolve.outputs.susfs_commit_android13_5_15_sukisu_nova }}
+      susfs_commit_android14_5_15_sukisu_nova: ${{ steps.resolve.outputs.susfs_commit_android14_5_15_sukisu_nova }}
+      susfs_commit_android14_6_1_sukisu_nova: ${{ steps.resolve.outputs.susfs_commit_android14_6_1_sukisu_nova }}
+      susfs_commit_android15_6_6_sukisu_nova: ${{ steps.resolve.outputs.susfs_commit_android15_6_6_sukisu_nova }}
+      susfs_commit_android16_6_12_sukisu_nova: ${{ steps.resolve.outputs.susfs_commit_android16_6_12_sukisu_nova }}
       ksu_commit: ${{ steps.resolve.outputs.ksu_commit }}
       bakasu_commit: ${{ steps.resolve.outputs.bakasu_commit }}
-      sukisu_ultra_commit: ${{ steps.resolve.outputs.sukisu_ultra_commit }}
+      sukisu_nova_commit: ${{ steps.resolve.outputs.sukisu_nova_commit }}
       finasu_commit: ${{ steps.resolve.outputs.finasu_commit }}
       kowsu_commit: ${{ steps.resolve.outputs.kowsu_commit }}
       kernel_patches_commit: ${{ steps.resolve.outputs.kernel_patches_commit }}
@@ -256,11 +258,11 @@ jobs:
           # 14-6.1) fs patches reference `fake_state` and will fail to link with
           # latest BakaSU; 6.6/6.12/6.18 are unaffected. Watch those 5 families.
           PIN_BAKASU="7b65bde0710b5e7c6f755545cb15a4abd417f3a8"
-          # SukiSU-Ultra: builtin tip (4bec532d, 2026-11-16); defines fake_state
+          # SukiSU Nova: builtin tip (4bec532d, 2026-11-16); defines fake_state
           # itself and calls the susfs_def.h no_su API -> OK on tips. Note the
           # repo's default branch (main, b8bd4b6c) is used only for SUSFS-off
           # builds, which resolve it at run time rather than from this pin.
-          PIN_SUKISU_ULTRA="4bec532dd447e2852aa8932afa768255350c103a"
+          PIN_SUKISU_NOVA="4bec532dd447e2852aa8932afa768255350c103a"
           # FinaSU: susfs-integrated fork of the tiann restructure; pin tracks
           # the susfs4ksu v2.3 ABI era its supercall dispatch is written against.
           # master tip 06d71e8a (2026-11-16).
@@ -304,8 +306,8 @@ jobs:
             [susfs_commit_android15_6_6]="f98f08223bbf469cc0a1542166383d253557fc32"
             [susfs_commit_android16_6_12]="9b0b13f069673b9b07b713a5c66977de4d62b175"
           )
-          # SukiSU-Ultra keeps its own SUSFS pin set too (same starting values).
-          declare -A PIN_SUSFS_SUKISU_ULTRA=(
+          # SukiSU Nova keeps its own SUSFS pin set too (same starting values).
+          declare -A PIN_SUSFS_SUKISU_NOVA=(
             [susfs_commit_android12_5_10]="784ac9e6fd49bb02499b5b60c57ccc9d0c680204"
             [susfs_commit_android13_5_10]="d480b312d650601888550529695706f4a112e29e"
             [susfs_commit_android13_5_15]="c1d1da42b74771944207ec45aaceff9c57e84985"
@@ -340,16 +342,16 @@ jobs:
           echo "kernelsu_branch=dev" >> "$GITHUB_OUTPUT"
 
           # Selected root implementation(s). Maps the human-facing choice
-          # (KernelSU-Next / KernelSU / BakaSU / SukiSU-Ultra / KowSU /
+          # (KernelSU-Next / KernelSU / BakaSU / SukiSU Nova / KowSU /
           # No Root / All) to internal root-setup flavors (next / kernelsu /
-          # bakasu / sukisu-ultra / kowsu / none). 'All' emits a matrix of
-          # the three core root flavors plus each pinned commit; SukiSU-Ultra,
+          # bakasu / sukisu-nova / kowsu / none). 'All' emits a matrix of
+          # the three core root flavors plus each pinned commit; SukiSU Nova,
           # KowSU, and No Root are opt-in only and never part of 'All'.
           #
-          # kernelsu, bakasu, and sukisu-ultra pin in verified mode;
+          # kernelsu, bakasu, and sukisu-nova pin in verified mode;
           # KernelSU-Next (next) always builds at latest.
           # With SUSFS off, every root tracks latest instead of pins:
-          # SukiSU-Ultra follows main (builtin only matters for SUSFS builds).
+          # SukiSU Nova follows main (builtin only matters for SUSFS builds).
           # Scheduled runs default SUSFS on (all features on, see the
           # feature_set computation) - a nightly is a full-featured build.
           if [ "${{ github.event_name }}" = "schedule" ]; then
@@ -360,17 +362,17 @@ jobs:
           if [ "$SCHED_SUSFS" = "true" ]; then
             KERNELSU_COMMIT="$(pick "$PIN_KERNELSU" https://github.com/tiann/KernelSU.git refs/heads/main)"
             BAKASU_COMMIT="$(pick "$PIN_BAKASU" https://github.com/Baka-SU/BakaSU.git refs/heads/main)"
-            SUKISU_ULTRA_COMMIT="$(pick "$PIN_SUKISU_ULTRA" https://github.com/SukiSU-Ultra/SukiSU-Ultra.git refs/heads/builtin)"
+            SUKISU_NOVA_COMMIT="$(pick "$PIN_SUKISU_NOVA" https://github.com/SukiSU-Nova/SukiSU-Nova.git refs/heads/builtin)"
             FINASU_COMMIT="$(pick "$PIN_FINASU" https://github.com/LyraVoid/FinaSU.git refs/heads/master)"
           else
             KERNELSU_COMMIT="$(resolve_sha https://github.com/tiann/KernelSU.git refs/heads/main)"
             BAKASU_COMMIT="$(resolve_sha https://github.com/Baka-SU/BakaSU.git refs/heads/main)"
-            SUKISU_ULTRA_COMMIT="$(resolve_sha https://github.com/SukiSU-Ultra/SukiSU-Ultra.git refs/heads/main)"
+            SUKISU_NOVA_COMMIT="$(resolve_sha https://github.com/SukiSU-Nova/SukiSU-Nova.git refs/heads/main)"
             FINASU_COMMIT="$(resolve_sha https://github.com/LyraVoid/FinaSU.git refs/heads/master)"
           fi
           emit ksu_commit "$KERNELSU_COMMIT"
           emit bakasu_commit "$BAKASU_COMMIT"
-          emit sukisu_ultra_commit "$SUKISU_ULTRA_COMMIT"
+          emit sukisu_nova_commit "$SUKISU_NOVA_COMMIT"
           # FinaSU ships susfs kernel-side and hard-depends on it (unguarded
           # linux/susfs.h includes), so it is only valid with SUSFS on;
           # susfs-off finasu builds are rejected in build.yml.
@@ -443,10 +445,10 @@ jobs:
               emit root_commit "$BAKASU_COMMIT"
               ROOT_MATRIX="[$(mk_entry bakasu BakaSU "$BAKASU_COMMIT" true)]"
               ;;
-            SukiSU-Ultra)
-              echo "root_flavor=sukisu-ultra" >> "$GITHUB_OUTPUT"
-              emit root_commit "$SUKISU_ULTRA_COMMIT"
-              ROOT_MATRIX="[$(mk_entry sukisu-ultra SukiSU-Ultra "$SUKISU_ULTRA_COMMIT" true)]"
+            "SukiSU Nova"|SukiSU-Ultra)
+              echo "root_flavor=sukisu-nova" >> "$GITHUB_OUTPUT"
+              emit root_commit "$SUKISU_NOVA_COMMIT"
+              ROOT_MATRIX="[$(mk_entry sukisu-nova SukiSU-Nova "$SUKISU_NOVA_COMMIT" true)]"
               ;;
             FinaSU)
               if [ "${{ inputs.use_susfs }}" = "false" ]; then
@@ -501,8 +503,8 @@ jobs:
             emit "$key" "$(pick "${PIN_SUSFS[$key]}" https://gitlab.com/simonpunk/susfs4ksu.git refs/heads/"${SUSFS_BRANCHES[$key]}")"
             # Per-flavor BakaSU SUSFS pin (same branch, own pin set).
             emit "${key}_bakasu" "$(pick "${PIN_SUSFS_BAKASU[$key]}" https://gitlab.com/simonpunk/susfs4ksu.git refs/heads/"${SUSFS_BRANCHES[$key]}")"
-            # Per-flavor SukiSU-Ultra SUSFS pin (same branch, own pin set).
-            emit "${key}_sukisu_ultra" "$(pick "${PIN_SUSFS_SUKISU_ULTRA[$key]}" https://gitlab.com/simonpunk/susfs4ksu.git refs/heads/"${SUSFS_BRANCHES[$key]}")"
+            # Per-flavor SukiSU Nova SUSFS pin (same branch, own pin set).
+            emit "${key}_sukisu_nova" "$(pick "${PIN_SUSFS_SUKISU_NOVA[$key]}" https://gitlab.com/simonpunk/susfs4ksu.git refs/heads/"${SUSFS_BRANCHES[$key]}")"
           done
 
           # Tracked build helpers (resolved automatically, before the run)
@@ -538,7 +540,7 @@ jobs:
           # A Release/Pre-Release ships whichever manger build(s) were resolved
           # in the manager step above (exact match per root flavor). No root
           # restriction applies here anymore -- KernelSU-Next, KernelSU, BakaSU,
-          # SukiSU-Ultra, KowSU, FinaSU, or 'All' are all valid release targets ('No Root'
+          # SukiSU Nova, KowSU, FinaSU, or 'All' are all valid release targets ('No Root'
           # ships no manager).
 
           # Scheduled (nightly) runs carry NO inputs - the use_* booleans are
@@ -691,13 +693,14 @@ jobs:
     with:
       config_file: .github/config/android12-5.10.json
       feature_set: ${{ needs.resolve-sources.outputs.feature_set }}
-      susfs_commit: ${{ matrix.root.root_flavor == 'bakasu' && needs.resolve-sources.outputs.susfs_commit_android12_5_10_bakasu || (matrix.root.root_flavor == 'sukisu-ultra' && needs.resolve-sources.outputs.susfs_commit_android12_5_10_sukisu_ultra || needs.resolve-sources.outputs.susfs_commit_android12_5_10) }}
+      susfs_commit: ${{ matrix.root.root_flavor == 'bakasu' && needs.resolve-sources.outputs.susfs_commit_android12_5_10_bakasu || (matrix.root.root_flavor == 'sukisu-nova' && needs.resolve-sources.outputs.susfs_commit_android12_5_10_sukisu_nova || needs.resolve-sources.outputs.susfs_commit_android12_5_10) }}
       nomount_commit: ${{ needs.resolve-sources.outputs.nomount_commit }}
       kernel_patches_commit: ${{ needs.resolve-sources.outputs.kernel_patches_commit }}
       root_flavor: ${{ matrix.root.root_flavor }}
       produce_stock_configs: ${{ matrix.root.produce }}
       root_commit: ${{ matrix.root.root_commit }}
       variant: ${{ matrix.root.variant }}
+      commit_mode: ${{ inputs.commit_mode || 'verified' }}
       ksu_branch: ${{ needs.resolve-sources.outputs.kernelsu_commit }}
       anykernel3_commit: ${{ needs.resolve-sources.outputs.anykernel3_commit }}
       droidspaces_commit: ${{ needs.resolve-sources.outputs.droidspaces_commit }}
@@ -722,13 +725,14 @@ jobs:
     with:
       config_file: .github/config/android13-5.10.json
       feature_set: ${{ needs.resolve-sources.outputs.feature_set }}
-      susfs_commit: ${{ matrix.root.root_flavor == 'bakasu' && needs.resolve-sources.outputs.susfs_commit_android13_5_10_bakasu || (matrix.root.root_flavor == 'sukisu-ultra' && needs.resolve-sources.outputs.susfs_commit_android13_5_10_sukisu_ultra || needs.resolve-sources.outputs.susfs_commit_android13_5_10) }}
+      susfs_commit: ${{ matrix.root.root_flavor == 'bakasu' && needs.resolve-sources.outputs.susfs_commit_android13_5_10_bakasu || (matrix.root.root_flavor == 'sukisu-nova' && needs.resolve-sources.outputs.susfs_commit_android13_5_10_sukisu_nova || needs.resolve-sources.outputs.susfs_commit_android13_5_10) }}
       nomount_commit: ${{ needs.resolve-sources.outputs.nomount_commit }}
       kernel_patches_commit: ${{ needs.resolve-sources.outputs.kernel_patches_commit }}
       root_flavor: ${{ matrix.root.root_flavor }}
       produce_stock_configs: ${{ matrix.root.produce }}
       root_commit: ${{ matrix.root.root_commit }}
       variant: ${{ matrix.root.variant }}
+      commit_mode: ${{ inputs.commit_mode || 'verified' }}
       ksu_branch: ${{ needs.resolve-sources.outputs.kernelsu_commit }}
       anykernel3_commit: ${{ needs.resolve-sources.outputs.anykernel3_commit }}
       droidspaces_commit: ${{ needs.resolve-sources.outputs.droidspaces_commit }}
@@ -753,13 +757,14 @@ jobs:
     with:
       config_file: .github/config/android13-5.15.json
       feature_set: ${{ needs.resolve-sources.outputs.feature_set }}
-      susfs_commit: ${{ matrix.root.root_flavor == 'bakasu' && needs.resolve-sources.outputs.susfs_commit_android13_5_15_bakasu || (matrix.root.root_flavor == 'sukisu-ultra' && needs.resolve-sources.outputs.susfs_commit_android13_5_15_sukisu_ultra || needs.resolve-sources.outputs.susfs_commit_android13_5_15) }}
+      susfs_commit: ${{ matrix.root.root_flavor == 'bakasu' && needs.resolve-sources.outputs.susfs_commit_android13_5_15_bakasu || (matrix.root.root_flavor == 'sukisu-nova' && needs.resolve-sources.outputs.susfs_commit_android13_5_15_sukisu_nova || needs.resolve-sources.outputs.susfs_commit_android13_5_15) }}
       nomount_commit: ${{ needs.resolve-sources.outputs.nomount_commit }}
       kernel_patches_commit: ${{ needs.resolve-sources.outputs.kernel_patches_commit }}
       root_flavor: ${{ matrix.root.root_flavor }}
       produce_stock_configs: ${{ matrix.root.produce }}
       root_commit: ${{ matrix.root.root_commit }}
       variant: ${{ matrix.root.variant }}
+      commit_mode: ${{ inputs.commit_mode || 'verified' }}
       ksu_branch: ${{ needs.resolve-sources.outputs.kernelsu_commit }}
       anykernel3_commit: ${{ needs.resolve-sources.outputs.anykernel3_commit }}
       droidspaces_commit: ${{ needs.resolve-sources.outputs.droidspaces_commit }}
@@ -784,13 +789,14 @@ jobs:
     with:
       config_file: .github/config/android14-5.15.json
       feature_set: ${{ needs.resolve-sources.outputs.feature_set }}
-      susfs_commit: ${{ matrix.root.root_flavor == 'bakasu' && needs.resolve-sources.outputs.susfs_commit_android14_5_15_bakasu || (matrix.root.root_flavor == 'sukisu-ultra' && needs.resolve-sources.outputs.susfs_commit_android14_5_15_sukisu_ultra || needs.resolve-sources.outputs.susfs_commit_android14_5_15) }}
+      susfs_commit: ${{ matrix.root.root_flavor == 'bakasu' && needs.resolve-sources.outputs.susfs_commit_android14_5_15_bakasu || (matrix.root.root_flavor == 'sukisu-nova' && needs.resolve-sources.outputs.susfs_commit_android14_5_15_sukisu_nova || needs.resolve-sources.outputs.susfs_commit_android14_5_15) }}
       nomount_commit: ${{ needs.resolve-sources.outputs.nomount_commit }}
       kernel_patches_commit: ${{ needs.resolve-sources.outputs.kernel_patches_commit }}
       root_flavor: ${{ matrix.root.root_flavor }}
       produce_stock_configs: ${{ matrix.root.produce }}
       root_commit: ${{ matrix.root.root_commit }}
       variant: ${{ matrix.root.variant }}
+      commit_mode: ${{ inputs.commit_mode || 'verified' }}
       ksu_branch: ${{ needs.resolve-sources.outputs.kernelsu_commit }}
       anykernel3_commit: ${{ needs.resolve-sources.outputs.anykernel3_commit }}
       droidspaces_commit: ${{ needs.resolve-sources.outputs.droidspaces_commit }}
@@ -815,13 +821,14 @@ jobs:
     with:
       config_file: .github/config/android14-6.1.json
       feature_set: ${{ needs.resolve-sources.outputs.feature_set }}
-      susfs_commit: ${{ matrix.root.root_flavor == 'bakasu' && needs.resolve-sources.outputs.susfs_commit_android14_6_1_bakasu || (matrix.root.root_flavor == 'sukisu-ultra' && needs.resolve-sources.outputs.susfs_commit_android14_6_1_sukisu_ultra || needs.resolve-sources.outputs.susfs_commit_android14_6_1) }}
+      susfs_commit: ${{ matrix.root.root_flavor == 'bakasu' && needs.resolve-sources.outputs.susfs_commit_android14_6_1_bakasu || (matrix.root.root_flavor == 'sukisu-nova' && needs.resolve-sources.outputs.susfs_commit_android14_6_1_sukisu_nova || needs.resolve-sources.outputs.susfs_commit_android14_6_1) }}
       nomount_commit: ${{ needs.resolve-sources.outputs.nomount_commit }}
       kernel_patches_commit: ${{ needs.resolve-sources.outputs.kernel_patches_commit }}
       root_flavor: ${{ matrix.root.root_flavor }}
       produce_stock_configs: ${{ matrix.root.produce }}
       root_commit: ${{ matrix.root.root_commit }}
       variant: ${{ matrix.root.variant }}
+      commit_mode: ${{ inputs.commit_mode || 'verified' }}
       ksu_branch: ${{ needs.resolve-sources.outputs.kernelsu_commit }}
       anykernel3_commit: ${{ needs.resolve-sources.outputs.anykernel3_commit }}
       droidspaces_commit: ${{ needs.resolve-sources.outputs.droidspaces_commit }}
@@ -846,13 +853,14 @@ jobs:
     with:
       config_file: .github/config/android15-6.6.json
       feature_set: ${{ needs.resolve-sources.outputs.feature_set }}
-      susfs_commit: ${{ matrix.root.root_flavor == 'bakasu' && needs.resolve-sources.outputs.susfs_commit_android15_6_6_bakasu || (matrix.root.root_flavor == 'sukisu-ultra' && needs.resolve-sources.outputs.susfs_commit_android15_6_6_sukisu_ultra || needs.resolve-sources.outputs.susfs_commit_android15_6_6) }}
+      susfs_commit: ${{ matrix.root.root_flavor == 'bakasu' && needs.resolve-sources.outputs.susfs_commit_android15_6_6_bakasu || (matrix.root.root_flavor == 'sukisu-nova' && needs.resolve-sources.outputs.susfs_commit_android15_6_6_sukisu_nova || needs.resolve-sources.outputs.susfs_commit_android15_6_6) }}
       nomount_commit: ${{ needs.resolve-sources.outputs.nomount_commit }}
       kernel_patches_commit: ${{ needs.resolve-sources.outputs.kernel_patches_commit }}
       root_flavor: ${{ matrix.root.root_flavor }}
       produce_stock_configs: ${{ matrix.root.produce }}
       root_commit: ${{ matrix.root.root_commit }}
       variant: ${{ matrix.root.variant }}
+      commit_mode: ${{ inputs.commit_mode || 'verified' }}
       ksu_branch: ${{ needs.resolve-sources.outputs.kernelsu_commit }}
       anykernel3_commit: ${{ needs.resolve-sources.outputs.anykernel3_commit }}
       droidspaces_commit: ${{ needs.resolve-sources.outputs.droidspaces_commit }}
@@ -877,13 +885,14 @@ jobs:
     with:
       config_file: .github/config/android16-6.12.json
       feature_set: ${{ needs.resolve-sources.outputs.feature_set }}
-      susfs_commit: ${{ matrix.root.root_flavor == 'bakasu' && needs.resolve-sources.outputs.susfs_commit_android16_6_12_bakasu || (matrix.root.root_flavor == 'sukisu-ultra' && needs.resolve-sources.outputs.susfs_commit_android16_6_12_sukisu_ultra || needs.resolve-sources.outputs.susfs_commit_android16_6_12) }}
+      susfs_commit: ${{ matrix.root.root_flavor == 'bakasu' && needs.resolve-sources.outputs.susfs_commit_android16_6_12_bakasu || (matrix.root.root_flavor == 'sukisu-nova' && needs.resolve-sources.outputs.susfs_commit_android16_6_12_sukisu_nova || needs.resolve-sources.outputs.susfs_commit_android16_6_12) }}
       nomount_commit: ${{ needs.resolve-sources.outputs.nomount_commit }}
       kernel_patches_commit: ${{ needs.resolve-sources.outputs.kernel_patches_commit }}
       root_flavor: ${{ matrix.root.root_flavor }}
       produce_stock_configs: ${{ matrix.root.produce }}
       root_commit: ${{ matrix.root.root_commit }}
       variant: ${{ matrix.root.variant }}
+      commit_mode: ${{ inputs.commit_mode || 'verified' }}
       ksu_branch: ${{ needs.resolve-sources.outputs.kernelsu_commit }}
       anykernel3_commit: ${{ needs.resolve-sources.outputs.anykernel3_commit }}
       droidspaces_commit: ${{ needs.resolve-sources.outputs.droidspaces_commit }}
@@ -920,6 +929,7 @@ jobs:
       produce_stock_configs: ${{ matrix.root.produce }}
       root_commit: ${{ matrix.root.root_commit }}
       variant: ${{ matrix.root.variant }}
+      commit_mode: ${{ inputs.commit_mode || 'verified' }}
       ksu_branch: ${{ needs.resolve-sources.outputs.kernelsu_commit }}
       anykernel3_commit: ${{ needs.resolve-sources.outputs.anykernel3_commit }}
       droidspaces_commit: ${{ needs.resolve-sources.outputs.droidspaces_commit }}
@@ -1886,7 +1896,7 @@ jobs:
           NOMOUNT_COMMIT: ${{ needs.resolve-sources.outputs.nomount_commit }}
           KSU_COMMIT: ${{ needs.resolve-sources.outputs.ksu_commit }}
           BAKASU_COMMIT: ${{ needs.resolve-sources.outputs.bakasu_commit }}
-          SUKISU_ULTRA_COMMIT: ${{ needs.resolve-sources.outputs.sukisu_ultra_commit }}
+          SUKISU_NOVA_COMMIT: ${{ needs.resolve-sources.outputs.sukisu_nova_commit }}
           FINASU_COMMIT: ${{ needs.resolve-sources.outputs.finasu_commit }}
           KOWSU_COMMIT: ${{ needs.resolve-sources.outputs.kowsu_commit }}
           KERNELSU_COMMIT: ${{ needs.resolve-sources.outputs.kernelsu_commit }}
@@ -1907,13 +1917,13 @@ jobs:
           SUSFS_ANDROID14_6_1_BAKASU: ${{ needs.resolve-sources.outputs.susfs_commit_android14_6_1_bakasu }}
           SUSFS_ANDROID15_6_6_BAKASU: ${{ needs.resolve-sources.outputs.susfs_commit_android15_6_6_bakasu }}
           SUSFS_ANDROID16_6_12_BAKASU: ${{ needs.resolve-sources.outputs.susfs_commit_android16_6_12_bakasu }}
-          SUSFS_ANDROID12_5_10_SUKISU_ULTRA: ${{ needs.resolve-sources.outputs.susfs_commit_android12_5_10_sukisu_ultra }}
-          SUSFS_ANDROID13_5_10_SUKISU_ULTRA: ${{ needs.resolve-sources.outputs.susfs_commit_android13_5_10_sukisu_ultra }}
-          SUSFS_ANDROID13_5_15_SUKISU_ULTRA: ${{ needs.resolve-sources.outputs.susfs_commit_android13_5_15_sukisu_ultra }}
-          SUSFS_ANDROID14_5_15_SUKISU_ULTRA: ${{ needs.resolve-sources.outputs.susfs_commit_android14_5_15_sukisu_ultra }}
-          SUSFS_ANDROID14_6_1_SUKISU_ULTRA: ${{ needs.resolve-sources.outputs.susfs_commit_android14_6_1_sukisu_ultra }}
-          SUSFS_ANDROID15_6_6_SUKISU_ULTRA: ${{ needs.resolve-sources.outputs.susfs_commit_android15_6_6_sukisu_ultra }}
-          SUSFS_ANDROID16_6_12_SUKISU_ULTRA: ${{ needs.resolve-sources.outputs.susfs_commit_android16_6_12_sukisu_ultra }}
+          SUSFS_ANDROID12_5_10_SUKISU_NOVA: ${{ needs.resolve-sources.outputs.susfs_commit_android12_5_10_sukisu_nova }}
+          SUSFS_ANDROID13_5_10_SUKISU_NOVA: ${{ needs.resolve-sources.outputs.susfs_commit_android13_5_10_sukisu_nova }}
+          SUSFS_ANDROID13_5_15_SUKISU_NOVA: ${{ needs.resolve-sources.outputs.susfs_commit_android13_5_15_sukisu_nova }}
+          SUSFS_ANDROID14_5_15_SUKISU_NOVA: ${{ needs.resolve-sources.outputs.susfs_commit_android14_5_15_sukisu_nova }}
+          SUSFS_ANDROID14_6_1_SUKISU_NOVA: ${{ needs.resolve-sources.outputs.susfs_commit_android14_6_1_sukisu_nova }}
+          SUSFS_ANDROID15_6_6_SUKISU_NOVA: ${{ needs.resolve-sources.outputs.susfs_commit_android15_6_6_sukisu_nova }}
+          SUSFS_ANDROID16_6_12_SUKISU_NOVA: ${{ needs.resolve-sources.outputs.susfs_commit_android16_6_12_sukisu_nova }}
       - name: Upload release notes preview artifact
         uses: actions/upload-artifact@v7
         with:

@@ -73,6 +73,11 @@ on:
         required: false
         type: boolean
         default: false
+      commit_mode:
+        description: "latest or verified, recorded in the build metadata"
+        required: false
+        type: string
+        default: "verified"
       page_size:
         description: "ARM64 page size: 4k (default) or 16k (Kleaf --page_size)"
         required: false
@@ -195,6 +200,37 @@ jobs:
         with:
           flavor: ${{ inputs.root_flavor }}
           commit: ${{ inputs.root_commit }}
+          # SukiSU Nova keeps its SUSFS hooks on builtin; main has no
+          # CONFIG_KSU_SUSFS at all. The action still verifies that the commit
+          # is really on the branch and falls back to detecting it.
+          branch: ${{ inputs.root_flavor == 'sukisu-nova' && (contains(inputs.feature_set, 'SUSFS') && 'builtin' || 'main') || '' }}
+
+      - name: Report root implementation metadata
+        if: inputs.root_flavor != '' && inputs.root_flavor != 'none'
+        shell: bash
+        env:
+          IMPLEMENTATION: ${{ inputs.root_flavor }}
+          FEATURE_SET: ${{ inputs.feature_set }}
+          COMMIT_MODE_INPUT: ${{ inputs.commit_mode }}
+        run: |
+          set -euo pipefail
+          susfs_mode="disabled"
+          case "$FEATURE_SET" in
+            *SUSFS*) susfs_mode="enabled" ;;
+          esac
+          commit_mode="${COMMIT_MODE_INPUT:-latest}"
+          {
+            echo "Root implementation : ${ROOT_MANAGER:-${IMPLEMENTATION}}"
+            echo "Repository          : ${KSU_REPOSITORY:-N/A}"
+            echo "Selected branch     : ${KSU_KERNEL_BRANCH:-${ROOT_BRANCH:-N/A}}"
+            echo "Selected commit     : ${ROOT_COMMIT:-N/A}"
+            echo "Commit mode         : ${commit_mode}"
+            echo "SUSFS mode          : ${susfs_mode}"
+            echo "KSU_VERSION         : ${KSU_VERSION:-N/A}"
+            echo "KSU_VERSION_FULL    : ${KSU_VERSION_FULL:-N/A}"
+            echo "VERSION_TAG         : ${KSU_VERSION_TAG:-N/A}"
+            echo "Version source      : ${KSU_VERSION_SOURCE:-N/A} (api: ${KSU_API_STATUS:-N/A})"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Mark No Root build metadata
         if: inputs.root_flavor == 'none'
@@ -209,14 +245,14 @@ jobs:
           python3 "${{ github.workspace }}/.github/scripts/append_fragment.py" \
             "${{ github.workspace }}/.github/fragments/disable-susfs-for-bakasu-without-susfs-feature.fragment" \
             --dest wild_defconfig.fragment --label disable-susfs-for-bakasu-without-susfs-feature
-      - name: Disable SUSFS for SukiSU-Ultra without SUSFS feature
-        if: inputs.root_flavor == 'sukisu-ultra' && !contains(inputs.feature_set, 'SUSFS')
+      - name: Disable SUSFS for SukiSU Nova without SUSFS feature
+        if: inputs.root_flavor == 'sukisu-nova' && !contains(inputs.feature_set, 'SUSFS')
         shell: bash
         working-directory: ${{ github.workspace }}/kernel/common
         run: |
           python3 "${{ github.workspace }}/.github/scripts/append_fragment.py" \
-            "${{ github.workspace }}/.github/fragments/disable-susfs-for-sukisu-ultra-without-susfs-feature.fragment" \
-            --dest wild_defconfig.fragment --label disable-susfs-for-sukisu-ultra-without-susfs-feature
+            "${{ github.workspace }}/.github/fragments/disable-susfs-for-sukisu-nova-without-susfs-feature.fragment" \
+            --dest wild_defconfig.fragment --label disable-susfs-for-sukisu-nova-without-susfs-feature
       - name: Single manager for BakaSU (multi-manager off)
         if: inputs.root_flavor == 'bakasu'
         shell: bash
@@ -233,9 +269,9 @@ jobs:
           python3 "${{ github.workspace }}/.github/scripts/append_fragment.py" \
             "${{ github.workspace }}/.github/fragments/enable-kernelsu-toolkit-support-for-bakasu.fragment" \
             --dest wild_defconfig.fragment --label enable-kernelsu-toolkit-support-for-bakasu
-      - name: Single manager for SukiSU-Ultra (trim cert table)
-        if: inputs.root_flavor == 'sukisu-ultra'
-        uses: ./.github/actions/single-manager-for-sukisu-ultra-trim-cert-table
+      - name: Single manager for SukiSU Nova (trim cert table)
+        if: inputs.root_flavor == 'sukisu-nova'
+        uses: ./.github/actions/single-manager-for-sukisu-nova-trim-cert-table
         with:
           root_flavor: ${{ inputs.root_flavor }}
       - name: Single manager for FinaSU (dynamic manager off)
@@ -429,6 +465,47 @@ jobs:
           version: ${{ inputs.version }}
           page_size: ${{ inputs.page_size }}
 
+      - name: Verify KernelSU Nova version in the artifact
+        # The version the manager reads back has to be the one this build
+        # resolved, not a number another stage invented. KSU_VERSION_FULL is a
+        # string in .rodata, so it can be read out of the image itself; the
+        # numeric macro is checked in the compiler command lines when Kleaf
+        # keeps them.
+        if: inputs.root_flavor == 'sukisu-nova'
+        shell: bash
+        run: |
+          set -uo pipefail
+          : "${KSU_VERSION:?KSU_VERSION was not resolved by root-setup}"
+          : "${KSU_VERSION_FULL:?KSU_VERSION_FULL was not resolved by root-setup}"
+
+          IMG=""
+          for candidate in \
+            "$GITHUB_WORKSPACE/AnyKernel3/Image" \
+            "$GITHUB_WORKSPACE/kernel/bazel-bin/common/kernel_aarch64/Image" \
+            "/home/runner/out/dist/Image"; do
+            if [ -f "$candidate" ]; then IMG="$candidate"; break; fi
+          done
+          if [ -z "$IMG" ]; then
+            echo "::error::no built Image found; cannot verify KSU_VERSION_FULL"
+            exit 1
+          fi
+          echo "image: $IMG"
+          if ! strings -a "$IMG" | grep -qF -- "$KSU_VERSION_FULL"; then
+            echo "::error::KSU_VERSION_FULL '$KSU_VERSION_FULL' is not in $IMG"
+            echo "found instead:"
+            strings -a "$IMG" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-' | sort -u | head -5 || true
+            exit 1
+          fi
+          echo "[ok] KSU_VERSION_FULL in image : $KSU_VERSION_FULL"
+
+          CMD_HIT="$(grep -rIl --include='*.cmd' -m1 -- "-DKSU_VERSION=${KSU_VERSION}" \
+            "$GITHUB_WORKSPACE/kernel" 2>/dev/null | head -n 1 || true)"
+          if [ -n "$CMD_HIT" ]; then
+            echo "[ok] KSU_VERSION in compile flags: ${KSU_VERSION} (${CMD_HIT#"$GITHUB_WORKSPACE"/})"
+          else
+            echo "::warning::no .cmd file carries -DKSU_VERSION=${KSU_VERSION}; the numeric value is only proven by the pinned build file and the FULL string"
+          fi
+
       - name: Verify Kernel Release String
         # End-to-end check: the version inside the built Image must be the stock
         # version (computed from the untouched setlocalversion + the real build
@@ -493,6 +570,7 @@ jobs:
           kernel_version: ${{ inputs.kernel_version }}
           os_patch_level: ${{ inputs.os_patch_level }}
           page_size: ${{ inputs.page_size }}
+          commit_mode: ${{ inputs.commit_mode }}
 
       - name: Upload Build Summary + Metadata
         uses: actions/upload-artifact@v7

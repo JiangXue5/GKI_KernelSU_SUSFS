@@ -14,7 +14,7 @@ Kernel-based su and root access management for Android.
 | KernelSU-Next | Created by [rifsxd](https://github.com/rifsxd). SUSFS-integrated builds sourced from pershoot. | [KernelSU-Next/KernelSU-Next](https://github.com/KernelSU-Next/KernelSU-Next) (upstream) · [pershoot/KernelSU-Next](https://github.com/pershoot/KernelSU-Next) (SUSFS-integrated) |
 | BakaSU (formerly ReSukiSU) | Fork of SukiSU Ultra/KernelSU with the goal of enhancing stability and security; also has its own SUSFS-integrated support, in addition to multi-support for other KSU fork managers. | [Baka-SU/BakaSU](https://github.com/Baka-SU/BakaSU) |
 | FinaSU | KernelSU fork with built-in SUSFS support (kernel-side supercall dispatch, selinux sid tracking); manager with FolkZygisk. | [LyraVoid/FinaSU](https://github.com/LyraVoid/FinaSU) |
-| SukiSU Ultra | Fork of KernelSU with built-in SUSFS support, KPM support, and more. | [SukiSU Ultra](https://github.com/sukisu-ultra/sukisu-ultra) |
+| SukiSU Nova (formerly SukiSU Ultra) | Fork of KernelSU with built-in SUSFS support, KPM support, and more. | [SukiSU-Nova/SukiSU-Nova](https://github.com/SukiSU-Nova/SukiSU-Nova) |
 | KowSU | Fork of KernelSU maintained by [KOWX712](https://github.com/KOWX712). | [KowSU](https://github.com/KOWX712/KernelSU) |
 
 ---

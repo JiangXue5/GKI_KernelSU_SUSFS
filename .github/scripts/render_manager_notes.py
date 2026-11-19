@@ -7,7 +7,7 @@ commits = {
     "KernelSU-Next": env("NEXT_COMMIT") or "latest dev tip",
     "KernelSU": env("KSU_COMMIT") or "latest main tip",
     "BakaSU": env("BAKASU_COMMIT") or "latest tip",
-    "SukiSU-Ultra": env("SUKISU_ULTRA_COMMIT") or "latest tip",
+    "SukiSU Nova": env("SUKISU_NOVA_COMMIT") or "latest tip",
     "FinaSU": env("FINASU_COMMIT") or "latest tip",
     "KowSU": "latest tip",
     "KernelSU-Next-SUSFS": env("NEXT_SUSFS_COMMIT") or "latest dev-susfs tip",
@@ -17,7 +17,7 @@ raw = env("MANAGER_LIST_FETCH")
 if raw:
     try:
         for m in json.loads(raw):
-            label = {"next":"KernelSU-Next","kernelsu":"KernelSU","bakasu":"BakaSU","sukisu-ultra":"SukiSU-Ultra","finasu":"FinaSU","kowsu":"KowSU","next-susfs":"KernelSU-Next-SUSFS"}.get(m.get("flavor",""), "")
+            label = {"next":"KernelSU-Next","kernelsu":"KernelSU","bakasu":"BakaSU","sukisu-nova":"SukiSU Nova","finasu":"FinaSU","kowsu":"KowSU","next-susfs":"KernelSU-Next-SUSFS"}.get(m.get("flavor",""), "")
             if label and m.get("stock"):
                 commits[label] = m["stock"]
     except: pass
@@ -27,7 +27,7 @@ lines.append("")
 lines.append("## Features")
 lines.append("")
 if root == "All":
-    lines.append("- All manager flavors (KernelSU-Next, KernelSU, BakaSU, SukiSU-Ultra, FinaSU, KernelSU-Next-SUSFS)")
+    lines.append("- All manager flavors (KernelSU-Next, KernelSU, BakaSU, SukiSU Nova, FinaSU, KernelSU-Next-SUSFS)")
 else:
     lines.append(f"- {root}")
 lines.append(f"- {'Built from source' if src else 'Fetched prebuilt (upstream CI)'}")

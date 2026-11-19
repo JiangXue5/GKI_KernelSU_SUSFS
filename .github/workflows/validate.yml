@@ -32,5 +32,11 @@ jobs:
       - name: Test kernel branding action behaviour
         run: python3 .github/scripts/test_kernel_branding.py
 
+      - name: Test KernelSU Nova version resolution
+        # Compares our resolver against upstream's own make evaluation on
+        # synthetic repos; also covers shallow clones, detached HEAD, the API
+        # fallback, the legacy flavor alias and the SUSFS branch mapping.
+        run: python3 .github/scripts/test_ksu_version.py
+
       - name: Validate Python syntax
         run: python3 .github/scripts/validate_python.py

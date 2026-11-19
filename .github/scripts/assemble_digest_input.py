@@ -35,7 +35,8 @@ RID_BY_LABEL = {
     "KernelSU-Next": "next",
     "KernelSU": "kernelsu",
     "BakaSU": "bakasu",
-    "SukiSU-Ultra": "sukisu-ultra",
+    "SukiSU-Nova": "sukisu-nova",
+    "SukiSU Nova": "sukisu-nova",
     "KowSU": "kowsu",
 }
 # Longest-first so 'KernelSU' doesn't shadow 'KernelSU-Next'.

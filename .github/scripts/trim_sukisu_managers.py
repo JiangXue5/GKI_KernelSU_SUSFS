@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Trim SukiSU-Ultra's manager table to its own signing key.
+"""Trim SukiSU Nova's manager table to its own signing key.
 
-SukiSU-Ultra hardcodes seven trusted manager certificates in
+SukiSU Nova hardcodes seven trusted manager certificates in
 kernel/manager/apk_sign.c:
 
     static struct apk_sign_key { unsigned size; const char *sha256; }
@@ -20,7 +20,7 @@ trusted equally, and the signature-fallback crowner
 (kernel/extension/dynamic_sig_fallback.c) reuses `is_manager_apk()` - meaning a
 one-row table also narrows that fallback to the single cert.
 
-Usage:  trim_sukisu_managers.py <path-to-SukiSU-Ultra-checkout>
+Usage:  trim_sukisu_managers.py <path-to-SukiSU Nova-checkout>
 
 Fails loudly (exit 1) if the table cannot be found exactly once, if the SukiSU
 row is missing, or if the result does not contain exactly one row. There is no
@@ -63,7 +63,7 @@ def table_bounds(lines: list[str], what: str) -> tuple[int, int]:
 
 def main() -> None:
     if len(sys.argv) != 2:
-        fail("usage: trim_sukisu_managers.py <path-to-SukiSU-Ultra-checkout>")
+        fail("usage: trim_sukisu_managers.py <path-to-SukiSU Nova-checkout>")
 
     path = f"{sys.argv[1].rstrip('/')}/kernel/manager/apk_sign.c"
     try:

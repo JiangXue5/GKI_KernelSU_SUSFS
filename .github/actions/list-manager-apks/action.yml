@@ -75,7 +75,7 @@ runs:
                   [ -f "$apk" ] || continue
                   NAME="$(basename "$apk")"
                   # Spoofed-manager artifacts (KernelSU-Next and
-                  # SukiSU-Ultra upstream CI; BakaSU publishes no spoofed
+                  # SukiSU Nova upstream CI; BakaSU publishes no spoofed
                   # manager) package APKs under the SAME filename as the
                   # stock build. A flat cp -f then silently overwrites
                   # stock with spoofed (or vice versa). Disambiguate: when the

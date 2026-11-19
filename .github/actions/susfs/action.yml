@@ -25,7 +25,7 @@ inputs:
     description: 'Kernel sublevel'
     required: true
   root_flavor:
-    description: 'Selected root implementation (kernelsu / next / bakasu / sukisu-ultra). KernelSU (tiann main) needs the 10_enable_susfs_for_ksu patch; other flavors already ship SUSFS.'
+    description: 'Selected root implementation (kernelsu / next / bakasu / sukisu-nova). KernelSU (tiann main) needs the 10_enable_susfs_for_ksu patch; other flavors already ship SUSFS.'
     required: false
     default: ""
 outputs:
@@ -54,7 +54,7 @@ runs:
         fi
         # KernelSU-Next (next) always uses the latest susfs4ksu gki branch tip so
         # SUSFS stays API-matched to the always-latest KernelSU-Next tree. All
-        # other roots (kernelsu, bakasu, finasu, sukisu-ultra) use the pinned
+        # other roots (kernelsu, bakasu, finasu, sukisu-nova) use the pinned
         # verified SUSFS commit.
         if [ "${{ inputs.root_flavor }}" = "next" ]; then
           BRANCH="gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}"
@@ -248,7 +248,7 @@ runs:
           #   if (func) / if (func != NULL) both trigger -Werror:
           #     -Wpointer-bool-conversion  vs  -Wtautological-pointer-compare
           # For the function form,  &func != NULL  silences both (clang note).
-          # For the pointer form (bakasu/next/sukisu-ultra/finasu, no 10_enable) we want ptr != NULL.
+          # For the pointer form (bakasu/next/sukisu-nova/finasu, no 10_enable) we want ptr != NULL.
           if grep -q "extern void security_dump_masked_av_fn" "$f"; then
             echo "[*] $f is extern-function form (10_enable applied), patching with &"
             sed -i 's/if (security_dump_masked_av_fn)/if (\&security_dump_masked_av_fn)/g' "$f"

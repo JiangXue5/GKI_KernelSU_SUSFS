@@ -89,7 +89,7 @@ ROOT_URLS = {
     "next": "https://github.com/pershoot/KernelSU-Next/commit/",
     "kernelsu": "https://github.com/tiann/KernelSU/commit/",
     "bakasu": "https://github.com/Baka-SU/BakaSU/commit/",
-    "sukisu-ultra": "https://github.com/SukiSU-Ultra/SukiSU-Ultra/commit/",
+    "sukisu-nova": "https://github.com/SukiSU-Nova/SukiSU-Nova/commit/",
     "kowsu": "https://github.com/KOWX712/KernelSU/commit/",
 }
 
@@ -113,7 +113,7 @@ FLAVOR_MANAGERS = {
 # KernelSU-Next with its trailing spoofed link, then BakaSU with its spoofed.
 # Any other flavor keeps alphabetical order after these.
 MANAGER_FLAVOR_ORDER = ["KernelSU", "KernelSU-Next", "BakaSU",
-                        "SukiSU-Ultra", "KowSU"]
+                        "SukiSU Nova", "KowSU"]
 
 
 def ordered_manager_flavors(flavors) -> list:
@@ -315,7 +315,7 @@ def main() -> int:
         # built a sublevel gets its own link (a KernelSU-Next + BakaSU
         # dispatch produces two kernels per version - both link).
         FLAVOR_ORDER = ["KernelSU-Next", "KernelSU", "BakaSU",
-                        "SukiSU-Ultra", "KowSU"]
+                        "SukiSU Nova", "KowSU"]
         flav_order = [f for f in FLAVOR_ORDER if f in e["flavors"]] + \
                      sorted(f for f in e["flavors"] if f not in FLAVOR_ORDER)
         sub_flav = {}  # (tag, flavor) -> nightly.link url
@@ -405,7 +405,7 @@ def main() -> int:
         # release notes' per-flavor Root lines.
         root_line = ""
         roots_sorted = [r for r in ("next", "kernelsu", "bakasu",
-                                    "sukisu-ultra", "kowsu") if r in e["roots"]]
+                                    "sukisu-nova", "kowsu") if r in e["roots"]]
         roots_sorted += [r for r in sorted(e["roots"]) if r not in roots_sorted]
         rlines = []
         rlines_rich = []

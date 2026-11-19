@@ -15,6 +15,8 @@ on:
           - KernelSU-Next
           - KernelSU
           - BakaSU
+          - SukiSU Nova
+          # Legacy label kept so an older dispatch payload still resolves.
           - SukiSU-Ultra
           - KowSU
           - FinaSU
@@ -36,8 +38,13 @@ on:
         required: false
         type: string
         default: ""
+      sukisu_nova_commit:
+        description: "Pin SukiSU Nova manager to this commit (40-char SHA, empty = latest main tip)"
+        required: false
+        type: string
+        default: ""
       sukisu_ultra_commit:
-        description: "Pin SukiSU-Ultra manager to this commit (40-char SHA, empty = latest main tip)"
+        description: "Deprecated alias of sukisu_nova_commit (pre-rename callers)"
         required: false
         type: string
         default: ""
@@ -78,8 +85,13 @@ on:
         required: false
         type: string
         default: ""
+      sukisu_nova_commit:
+        description: "Pin SukiSU Nova manager commit"
+        required: false
+        type: string
+        default: ""
       sukisu_ultra_commit:
-        description: "Pin SukiSU-Ultra manager commit"
+        description: "Deprecated alias of sukisu_nova_commit (pre-rename callers)"
         required: false
         type: string
         default: ""
@@ -122,7 +134,7 @@ jobs:
           next_susfs_commit: ${{ inputs.kernelsu_next_susfs_commit }}
           kernelsu_commit: ${{ inputs.kernelsu_commit }}
           bakasu_commit: ${{ inputs.bakasu_commit }}
-          sukisu_ultra_commit: ${{ inputs.sukisu_ultra_commit }}
+          sukisu_nova_commit: ${{ inputs.sukisu_nova_commit || inputs.sukisu_ultra_commit }}
           finasu_commit: ${{ inputs.finasu_commit }}
 
   list-manager-apks:
@@ -170,8 +182,8 @@ jobs:
           - flavor: bakasu
             repo: https://github.com/Baka-SU/BakaSU.git
             ref: main
-          - flavor: sukisu-ultra
-            repo: https://github.com/SukiSU-Ultra/SukiSU-Ultra.git
+          - flavor: sukisu-nova
+            repo: https://github.com/SukiSU-Nova/SukiSU-Nova.git
             ref: main
           - flavor: kowsu
             repo: https://github.com/KOWX712/KernelSU.git
@@ -191,7 +203,7 @@ jobs:
             KernelSU-Next-SUSFS) [[ "$FLAVOR" == "next-susfs" ]] && echo "run=true" >> "$GITHUB_OUTPUT" || echo "run=false" >> "$GITHUB_OUTPUT" ;;
             KernelSU) [[ "$FLAVOR" == "kernelsu" ]] && echo "run=true" >> "$GITHUB_OUTPUT" || echo "run=false" >> "$GITHUB_OUTPUT" ;;
             BakaSU) [[ "$FLAVOR" == "bakasu" ]] && echo "run=true" >> "$GITHUB_OUTPUT" || echo "run=false" >> "$GITHUB_OUTPUT" ;;
-            SukiSU-Ultra) [[ "$FLAVOR" == "sukisu-ultra" ]] && echo "run=true" >> "$GITHUB_OUTPUT" || echo "run=false" >> "$GITHUB_OUTPUT" ;;
+            "SukiSU Nova"|SukiSU-Ultra) [[ "$FLAVOR" == "sukisu-nova" ]] && echo "run=true" >> "$GITHUB_OUTPUT" || echo "run=false" >> "$GITHUB_OUTPUT" ;;
             KowSU) [[ "$FLAVOR" == "kowsu" ]] && echo "run=true" >> "$GITHUB_OUTPUT" || echo "run=false" >> "$GITHUB_OUTPUT" ;;
             FinaSU) [[ "$FLAVOR" == "finasu" ]] && echo "run=true" >> "$GITHUB_OUTPUT" || echo "run=false" >> "$GITHUB_OUTPUT" ;;
             *) echo "run=false" >> "$GITHUB_OUTPUT" ;;
@@ -206,7 +218,7 @@ jobs:
           KSU_NEXT_SUSFS_COMMIT: ${{ inputs.kernelsu_next_susfs_commit }}
           KSU_COMMIT: ${{ inputs.kernelsu_commit }}
           BAKASU_COMMIT: ${{ inputs.bakasu_commit }}
-          SUKISU_ULTRA_COMMIT: ${{ inputs.sukisu_ultra_commit }}
+          SUKISU_NOVA_COMMIT: ${{ inputs.sukisu_nova_commit || inputs.sukisu_ultra_commit }}
           FINASU_COMMIT: ${{ inputs.finasu_commit }}
         run: |
           set -euo pipefail
@@ -216,7 +228,7 @@ jobs:
             next-susfs) pin="$KSU_NEXT_SUSFS_COMMIT" ;;
             kernelsu) pin="$KSU_COMMIT" ;;
             bakasu) pin="$BAKASU_COMMIT" ;;
-            sukisu-ultra) pin="$SUKISU_ULTRA_COMMIT" ;;
+            sukisu-nova) pin="$SUKISU_NOVA_COMMIT" ;;
             kowsu) pin="" ;;
             finasu) pin="$FINASU_COMMIT" ;;
           esac
@@ -354,8 +366,8 @@ jobs:
           - flavor: bakasu
             repo: https://github.com/Baka-SU/BakaSU.git
             ref: main
-          - flavor: sukisu-ultra
-            repo: https://github.com/SukiSU-Ultra/SukiSU-Ultra.git
+          - flavor: sukisu-nova
+            repo: https://github.com/SukiSU-Nova/SukiSU-Nova.git
             ref: main
           - flavor: kowsu
             repo: https://github.com/KOWX712/KernelSU.git
@@ -380,7 +392,7 @@ jobs:
             KernelSU-Next-SUSFS) [[ "$FLAVOR" == "next-susfs" ]] && echo "run=true" >> "$GITHUB_OUTPUT" || echo "run=false" >> "$GITHUB_OUTPUT" ;;
             KernelSU) [[ "$FLAVOR" == "kernelsu" ]] && echo "run=true" >> "$GITHUB_OUTPUT" || echo "run=false" >> "$GITHUB_OUTPUT" ;;
             BakaSU) [[ "$FLAVOR" == "bakasu" ]] && echo "run=true" >> "$GITHUB_OUTPUT" || echo "run=false" >> "$GITHUB_OUTPUT" ;;
-            SukiSU-Ultra) [[ "$FLAVOR" == "sukisu-ultra" ]] && echo "run=true" >> "$GITHUB_OUTPUT" || echo "run=false" >> "$GITHUB_OUTPUT" ;;
+            "SukiSU Nova"|SukiSU-Ultra) [[ "$FLAVOR" == "sukisu-nova" ]] && echo "run=true" >> "$GITHUB_OUTPUT" || echo "run=false" >> "$GITHUB_OUTPUT" ;;
             KowSU) [[ "$FLAVOR" == "kowsu" ]] && echo "run=true" >> "$GITHUB_OUTPUT" || echo "run=false" >> "$GITHUB_OUTPUT" ;;
             FinaSU) [[ "$FLAVOR" == "finasu" ]] && echo "run=true" >> "$GITHUB_OUTPUT" || echo "run=false" >> "$GITHUB_OUTPUT" ;;
             *) echo "run=false" >> "$GITHUB_OUTPUT" ;;
@@ -396,7 +408,7 @@ jobs:
           KSU_NEXT_SUSFS_COMMIT: ${{ inputs.kernelsu_next_susfs_commit }}
           KSU_COMMIT: ${{ inputs.kernelsu_commit }}
           BAKASU_COMMIT: ${{ inputs.bakasu_commit }}
-          SUKISU_ULTRA_COMMIT: ${{ inputs.sukisu_ultra_commit }}
+          SUKISU_NOVA_COMMIT: ${{ inputs.sukisu_nova_commit || inputs.sukisu_ultra_commit }}
           FINASU_COMMIT: ${{ inputs.finasu_commit }}
         run: |
           set -euo pipefail
@@ -406,7 +418,7 @@ jobs:
             next-susfs) pin="$KSU_NEXT_SUSFS_COMMIT" ;;
             kernelsu) pin="$KSU_COMMIT" ;;
             bakasu) pin="$BAKASU_COMMIT" ;;
-            sukisu-ultra) pin="$SUKISU_ULTRA_COMMIT" ;;
+            sukisu-nova) pin="$SUKISU_NOVA_COMMIT" ;;
             kowsu) pin="" ;;
             finasu) pin="$FINASU_COMMIT" ;;
           esac
@@ -529,10 +541,10 @@ jobs:
           BAKASU_KEYSTORE_PASSWORD: ${{ secrets.BAKASU_KEYSTORE_PASSWORD }}
           BAKASU_KEY_ALIAS: ${{ secrets.BAKASU_KEY_ALIAS }}
           BAKASU_KEY_PASSWORD: ${{ secrets.BAKASU_KEY_PASSWORD }}
-          SUKISU_ULTRA_KEYSTORE: ${{ secrets.SUKISU_ULTRA_KEYSTORE }}
-          SUKISU_ULTRA_KEYSTORE_PASSWORD: ${{ secrets.SUKISU_ULTRA_KEYSTORE_PASSWORD }}
-          SUKISU_ULTRA_KEY_ALIAS: ${{ secrets.SUKISU_ULTRA_KEY_ALIAS }}
-          SUKISU_ULTRA_KEY_PASSWORD: ${{ secrets.SUKISU_ULTRA_KEY_PASSWORD }}
+          SUKISU_NOVA_KEYSTORE: ${{ secrets.SUKISU_NOVA_KEYSTORE }}
+          SUKISU_NOVA_KEYSTORE_PASSWORD: ${{ secrets.SUKISU_NOVA_KEYSTORE_PASSWORD }}
+          SUKISU_NOVA_KEY_ALIAS: ${{ secrets.SUKISU_NOVA_KEY_ALIAS }}
+          SUKISU_NOVA_KEY_PASSWORD: ${{ secrets.SUKISU_NOVA_KEY_PASSWORD }}
           FINASU_KEYSTORE: ${{ secrets.FINASU_KEYSTORE }}
           FINASU_KEYSTORE_PASSWORD: ${{ secrets.FINASU_KEYSTORE_PASSWORD }}
           FINASU_KEY_ALIAS: ${{ secrets.FINASU_KEY_ALIAS }}
@@ -554,7 +566,7 @@ jobs:
               next|next-susfs) b64="${NEXT_KEYSTORE:-}"; pw="${NEXT_KEYSTORE_PASSWORD:-}"; alias="${NEXT_KEY_ALIAS:-}"; kp="${NEXT_KEY_PASSWORD:-}" ;;
               kernelsu) b64="${KERNELSU_KEYSTORE:-}"; pw="${KERNELSU_KEYSTORE_PASSWORD:-}"; alias="${KERNELSU_KEY_ALIAS:-}"; kp="${KERNELSU_KEY_PASSWORD:-}" ;;
               bakasu) b64="${BAKASU_KEYSTORE:-}"; pw="${BAKASU_KEYSTORE_PASSWORD:-}"; alias="${BAKASU_KEY_ALIAS:-}"; kp="${BAKASU_KEY_PASSWORD:-}" ;;
-              sukisu-ultra) b64="${SUKISU_ULTRA_KEYSTORE:-}"; pw="${SUKISU_ULTRA_KEYSTORE_PASSWORD:-}"; alias="${SUKISU_ULTRA_KEY_ALIAS:-}"; kp="${SUKISU_ULTRA_KEY_PASSWORD:-}" ;;
+              sukisu-nova) b64="${SUKISU_NOVA_KEYSTORE:-}"; pw="${SUKISU_NOVA_KEYSTORE_PASSWORD:-}"; alias="${SUKISU_NOVA_KEY_ALIAS:-}"; kp="${SUKISU_NOVA_KEY_PASSWORD:-}" ;;
               finasu) b64="${FINASU_KEYSTORE:-}"; pw="${FINASU_KEYSTORE_PASSWORD:-}"; alias="${FINASU_KEY_ALIAS:-}"; kp="${FINASU_KEY_PASSWORD:-}" ;;
             esac
             if [ -n "${b64:-}" ] && [ -n "${pw:-}" ] && [ -n "${alias:-}" ]; then
@@ -633,8 +645,8 @@ jobs:
           elif [ "$flavor" = "finasu" ]; then
             # Upstream FinaSU (tiann-style): clean assembleRelease
             gradle_build "clean assembleRelease" || gradle_build "assembleRelease" || true
-          elif [ "$flavor" = "sukisu-ultra" ]; then
-            # Upstream SukiSU-Ultra: clean assembleRelease, spoofed via randomizer
+          elif [ "$flavor" = "sukisu-nova" ]; then
+            # Upstream SukiSU Nova: clean assembleRelease, spoofed via randomizer
             gradle_build "clean assembleRelease" || true
             if [ -x ./randomizer ]; then
               ./randomizer 2>&1 | tail -20 || true
@@ -797,7 +809,7 @@ jobs:
           NEXT_COMMIT: ${{ inputs.kernelsu_next_commit }}
           KSU_COMMIT: ${{ inputs.kernelsu_commit }}
           BAKASU_COMMIT: ${{ inputs.bakasu_commit }}
-          SUKISU_ULTRA_COMMIT: ${{ inputs.sukisu_ultra_commit }}
+          SUKISU_NOVA_COMMIT: ${{ inputs.sukisu_nova_commit || inputs.sukisu_ultra_commit }}
           FINASU_COMMIT: ${{ inputs.finasu_commit }}
           NEXT_SUSFS_COMMIT: ${{ inputs.kernelsu_next_susfs_commit }}
           MANAGER_LIST_FETCH: ${{ needs.resolve-managers.outputs.manager_list }}

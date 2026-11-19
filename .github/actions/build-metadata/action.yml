@@ -22,6 +22,9 @@ inputs:
   page_size:
     required: false
     default: '4k'
+  commit_mode:
+    required: false
+    default: ''
 
 runs:
   using: "composite"
@@ -120,12 +123,29 @@ runs:
           nomount_module_sha256="N/A"
         fi
 
+        commit_mode="${{ inputs.commit_mode }}"
+        [ -n "$commit_mode" ] || commit_mode="unspecified"
+        susfs_mode="disabled"
+        case "${{ inputs.feature_set }}" in
+          *SUSFS*) susfs_mode="enabled" ;;
+        esac
+
         jq -n \
           --arg method "$METHOD" \
           --arg root_implementation "${ROOT_IMPLEMENTATION:-KernelSU-Next (legacy path)}" \
           --arg root_manager "${ROOT_MANAGER:-KernelSU-Next Manager}" \
           --arg root_version "${ROOT_VERSION:-${KSU_GIT_TAG:-N/A}}" \
           --arg root_commit "${ROOT_COMMIT:-${KSU_COMMIT:-N/A}}" \
+          --arg root_branch "${KSU_KERNEL_BRANCH:-N/A}" \
+          --arg ksu_version "${KSU_VERSION:-N/A}" \
+          --arg ksu_version_full "${KSU_VERSION_FULL:-N/A}" \
+          --arg ksu_version_tag "${KSU_VERSION_TAG:-N/A}" \
+          --arg ksu_version_source "${KSU_VERSION_SOURCE:-N/A}" \
+          --arg ksu_api_status "${KSU_API_STATUS:-N/A}" \
+          --arg upstream_ci_version "${KSU_UPSTREAM_CI_VERSION:-N/A}" \
+          --arg upstream_ci_delta "${KSU_UPSTREAM_CI_DELTA:-N/A}" \
+          --arg commit_mode "$commit_mode" \
+          --arg susfs_mode "$susfs_mode" \
           --arg susfs_commit "${SUSFS_COMMIT:-N/A}" \
           --arg nomount_commit "${NOMOUNT_COMMIT:-N/A}" \
           --arg usba_commit "${USBA_COMMIT:-N/A}" \
@@ -150,7 +170,16 @@ runs:
               implementation: $root_implementation,
               manager: $root_manager,
               version: $root_version,
-              commit: $root_commit
+              commit: $root_commit,
+              branch: $root_branch,
+              ksu_version: $ksu_version,
+              ksu_version_full: $ksu_version_full,
+              ksu_version_tag: $ksu_version_tag,
+              version_source: $ksu_version_source,
+              upstream_ci_version: $upstream_ci_version,
+              upstream_ci_delta: $upstream_ci_delta,
+              commit_mode: $commit_mode,
+              susfs_mode: $susfs_mode
             },
             susfs_revision: $susfs_commit,
             nomount_commit: $nomount_commit,
@@ -180,6 +209,9 @@ runs:
           .status == "Build-verified only" and
           (.root.manager | length > 0) and
           (.root.version | length > 0) and
+          (.root.ksu_version | test("^[0-9]+$|^N/A$")) and
+          (.root.ksu_version_full | length > 0) and
+          (.root.commit_mode | length > 0) and
           ((.susfs_revision | test("^[0-9a-f]{40}$")) or .susfs_revision == "N/A") and
           (.kernel_source_commit | test("^[0-9a-f]{40}$")) and
           (.artifact_url | startswith("https://")) and

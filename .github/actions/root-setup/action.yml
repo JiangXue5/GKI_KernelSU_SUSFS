@@ -2,11 +2,18 @@ name: Setup pinned root implementation
 description: Clone exactly one supported root implementation at a verified commit
 inputs:
   flavor:
-    description: "kernelsu, next, bakasu, finasu, sukisu-ultra, or kowsu"
+    description: "kernelsu, next, bakasu, finasu, sukisu-nova (legacy: sukisu-ultra), or kowsu"
     required: true
   commit:
     description: 'Full immutable commit SHA'
     required: true
+  branch:
+    description: >-
+      Upstream branch the commit was resolved from (main / builtin). Empty =
+      detect it from the fetched refs. Only used to make KSU_VERSION_FULL name
+      the branch the commit really belongs to.
+    required: false
+    default: ''
 
 runs:
   using: composite
@@ -14,11 +21,15 @@ runs:
     - name: Clone and integrate selected root
       shell: bash
       working-directory: ${{ github.workspace }}/kernel
+      env:
+        FLAVOR_INPUT: ${{ inputs.flavor }}
+        COMMIT_INPUT: ${{ inputs.commit }}
+        BRANCH_HINT: ${{ inputs.branch }}
       run: |
         set -euo pipefail
 
-        flavor="${{ inputs.flavor }}"
-        expected_commit="${{ inputs.commit }}"
+        flavor="$FLAVOR_INPUT"
+        expected_commit="$COMMIT_INPUT"
         case "$flavor" in
           kernelsu)
             repo="https://github.com/tiann/KernelSU.git"
@@ -35,10 +46,16 @@ runs:
             directory="BakaSU"
             manager="BakaSU Manager"
             ;;
-          sukisu-ultra)
-            repo="https://github.com/SukiSU-Ultra/SukiSU-Ultra.git"
-            directory="SukiSU-Ultra"
-            manager="SukiSU-Ultra Manager"
+          sukisu-nova|sukisu-ultra)
+            # sukisu-ultra is the pre-2026-11-15 name; it still resolves to the
+            # same project so an older workflow_call keeps working.
+            if [ "$flavor" = "sukisu-ultra" ]; then
+              echo "[i] sukisu-ultra is the legacy name of sukisu-nova; building SukiSU Nova"
+              flavor="sukisu-nova"
+            fi
+            repo="https://github.com/SukiSU-Nova/SukiSU-Nova.git"
+            directory="SukiSU-Nova"
+            manager="SukiSU Nova Manager"
             ;;
           kowsu)
             repo="https://github.com/KOWX712/KernelSU.git"
@@ -61,7 +78,7 @@ runs:
           exit 2
         fi
 
-        for candidate in KernelSU KernelSU-Next BakaSU FinaSU SukiSU-Ultra KowSU; do
+        for candidate in KernelSU KernelSU-Next BakaSU FinaSU SukiSU-Nova SukiSU Nova KowSU; do
           if [ "$candidate" != "$directory" ] && [ -e "$candidate" ]; then
             echo "Refusing mixed root implementations: found $candidate." >&2
             exit 1
@@ -96,15 +113,18 @@ runs:
         fi
 
         # ---- deterministic KSU version -------------------------------------
-        # kernel/Kbuild derives KSU_VERSION from git: BASE_BRANCH comes from
-        # `rev-parse --abbrev-ref HEAD`, then it counts merge-base(HEAD,
-        # origin/<branch>). On our detached checkout `rev-parse` returns the
-        # literal "HEAD", so BASE_BRANCH stays "HEAD" and the merge-base runs
-        # against refs/remotes/origin/HEAD -- whatever branch the remote happens
-        # to default to -- instead of the branch we actually want. That makes the
-        # reported version depend on clone layout rather than on the commit, and
-        # a still-shallow clone silently counts a truncated history on top of it.
-        # Unshallow, resolve the upstream base explicitly, and pin the result.
+        # Upstream derives KSU_VERSION inside kernel/Kbuild (or Makefile):
+        #   base + count(REPO_BRANCH) + offset      (main: +996)
+        #   base + count(REPO_BRANCH) - offset      (builtin: -4001)
+        # and KSU_VERSION_FULL from `rev-parse --abbrev-ref HEAD`. Two things
+        # break in this pipeline: the Kleaf sandbox has no .git (the git and
+        # API expressions collapse to their fallback constants), and the
+        # checkout is detached (HEAD is not a branch name). A shallow clone
+        # truncates the count on top of that.
+        #
+        # So: unshallow, put HEAD on a real branch, then evaluate the tree's own
+        # formula against the full clone and pin it. The formula, the counted
+        # branch and the offset sign are read from the tree, never hardcoded.
         if [ -f "$directory/.git/shallow" ]; then
           git -C "$directory" fetch --unshallow --tags origin 2>/dev/null || true
         fi
@@ -112,38 +132,91 @@ runs:
           echo "ERROR: $directory is still a shallow clone -- KSU_VERSION would be wrong." >&2
           exit 1
         fi
-        case "$flavor" in
-          next)     upstream_branch="dev" ;;
-          kowsu)    upstream_branch="master" ;;
-          finasu)   upstream_branch="master" ;;
-          *)        upstream_branch="main" ;;
-        esac
-        base_commit="$(git -C "$directory" merge-base HEAD "refs/remotes/origin/${upstream_branch}" 2>/dev/null || echo "$actual_commit")"
-        ksu_count="$(git -C "$directory" rev-list --count "$base_commit")"
-        ksu_tag="$(git -C "$directory" describe --tags --abbrev=0 "$base_commit" 2>/dev/null || echo unknown)"
-        ksu_version=$((30000 + ksu_count))
-        echo "[+] KSU version: ${ksu_version} (30000 + ${ksu_count} commits at ${base_commit:0:12}, upstream ${upstream_branch})"
-        echo "ROOT_BASE_COMMIT=$base_commit" >> "$GITHUB_ENV"
-        echo "ROOT_VERSION_CODE=$ksu_version" >> "$GITHUB_ENV"
-        # Only override files that carry the git-derived heuristic; other root
-        # implementations compute their own version and are left alone.
-        kbuild="$directory/kernel/Kbuild"
-        if [ -f "$kbuild" ] && grep -q 'BASE_BRANCH' "$kbuild" && ! grep -q '^# CI: deterministic KSU_VERSION' "$kbuild"; then
-          {
-            echo ''
-            echo '# CI: deterministic KSU_VERSION (appended by .github/actions/root-setup).'
-            echo '# The git heuristic above reads rev-parse --abbrev-ref HEAD, which is'
-            echo '# "HEAD" on a detached checkout, so it counts the wrong ref.'
-            echo "KSU_VERSION := $ksu_version"
-            echo "KSU_VERSION_TAG := \"$ksu_tag\""
-          } >> "$kbuild"
-          echo "[+] pinned KSU_VERSION=${ksu_version} / tag ${ksu_tag} in $kbuild"
+
+        if [ "$flavor" = "sukisu-nova" ]; then
+          nova_branch=""
+          if [ -n "${BRANCH_HINT:-}" ] \
+             && git -C "$directory" rev-parse --verify --quiet "refs/remotes/origin/${BRANCH_HINT}" >/dev/null 2>&1 \
+             && git -C "$directory" merge-base --is-ancestor "$actual_commit" "refs/remotes/origin/${BRANCH_HINT}" 2>/dev/null; then
+            nova_branch="$BRANCH_HINT"
+          elif [ -n "${BRANCH_HINT:-}" ]; then
+            echo "[!] ${actual_commit:0:12} is not on origin/${BRANCH_HINT}; detecting the branch" >&2
+          fi
+          if [ -z "$nova_branch" ]; then
+            nova_contains="$(git -C "$directory" branch -r --contains "$actual_commit" 2>/dev/null \
+              | sed -e 's/^ *//' -e 's#^refs/remotes/origin/##' -e 's#^origin/##' \
+              | grep -v -- '->' | grep -vx 'HEAD')"
+            # Priority: the long-lived release branches first. dev currently
+            # points at the same commit as main, and naming HEAD after dev
+            # would print @dev where upstream prints @main.
+            for want in main builtin dev; do
+              if printf '%s\n' "$nova_contains" | grep -qx "$want"; then
+                nova_branch="$want"
+                break
+              fi
+            done
+            if [ -z "$nova_branch" ] && [ -n "$nova_contains" ]; then
+              nova_branch="$(printf '%s\n' "$nova_contains" | head -n 1)"
+            fi
+          fi
+          if [ -z "$nova_branch" ]; then
+            echo "ERROR: no upstream branch is known to contain ${actual_commit}." >&2
+            exit 1
+          fi
+          # Upstream's git_branch is `rev-parse --abbrev-ref HEAD`; on a
+          # detached checkout that is "HEAD", which is what produced
+          # KSU_VERSION_FULL="...@HEAD" in earlier builds.
+          git -C "$directory" checkout -B "$nova_branch" "$actual_commit" >/dev/null 2>&1
+          echo "[+] SukiSU Nova: branch ${nova_branch}, commit ${actual_commit}"
+
+          python3 "${{ github.workspace }}/.github/scripts/ksu_version.py" \
+            --repo "$directory" \
+            --branch "$nova_branch" \
+            --pin \
+            --github-env "$GITHUB_ENV"
+
+          KSU_VERSION="$(sed -n 's/^KSU_VERSION=//p' "$GITHUB_ENV" | tail -n 1)"
+          KSU_VERSION_FULL="$(sed -n 's/^KSU_VERSION_FULL=//p' "$GITHUB_ENV" | tail -n 1)"
+          echo "ROOT_BASE_COMMIT=$actual_commit" >> "$GITHUB_ENV"
+          echo "ROOT_VERSION_CODE=${KSU_VERSION}" >> "$GITHUB_ENV"
+          echo "[+] pinned KSU_VERSION=${KSU_VERSION} KSU_VERSION_FULL=${KSU_VERSION_FULL}"
+        else
+          case "$flavor" in
+            next)     upstream_branch="dev" ;;
+            kowsu)    upstream_branch="master" ;;
+            finasu)   upstream_branch="master" ;;
+            *)        upstream_branch="main" ;;
+          esac
+          base_commit="$(git -C "$directory" merge-base HEAD "refs/remotes/origin/${upstream_branch}" 2>/dev/null || echo "$actual_commit")"
+          ksu_count="$(git -C "$directory" rev-list --count "$base_commit")"
+          ksu_tag="$(git -C "$directory" describe --tags --abbrev=0 "$base_commit" 2>/dev/null || echo unknown)"
+          ksu_version=$((30000 + ksu_count))
+          echo "[+] KSU version: ${ksu_version} (30000 + ${ksu_count} commits at ${base_commit:0:12}, upstream ${upstream_branch})"
+          echo "ROOT_BASE_COMMIT=$base_commit" >> "$GITHUB_ENV"
+          echo "ROOT_VERSION_CODE=$ksu_version" >> "$GITHUB_ENV"
+          # Only override files that carry the git-derived heuristic; other root
+          # implementations compute their own version and are left alone.
+          kbuild="$directory/kernel/Kbuild"
+          if [ -f "$kbuild" ] && grep -q 'BASE_BRANCH' "$kbuild" && ! grep -q '^# CI: deterministic KSU_VERSION' "$kbuild"; then
+            {
+              echo ''
+              echo '# CI: deterministic KSU_VERSION (appended by .github/actions/root-setup).'
+              echo '# The git heuristic above reads rev-parse --abbrev-ref HEAD, which is'
+              echo '# "HEAD" on a detached checkout, so it counts the wrong ref.'
+              echo "KSU_VERSION := $ksu_version"
+              echo "KSU_VERSION_TAG := \"$ksu_tag\""
+            } >> "$kbuild"
+            echo "[+] pinned KSU_VERSION=${ksu_version} / tag ${ksu_tag} in $kbuild"
+          fi
         fi
         if [ ! -f "$directory/kernel/Kconfig" ] || [ ! -f "$directory/kernel/Makefile" ]; then
           echo "Selected root checkout does not contain a kernel integration." >&2
           exit 1
         fi
         root_version="$(git -C "$directory" describe --tags --always --dirty)"
+        if [ "$flavor" = "sukisu-nova" ] && [ -n "${KSU_VERSION_FULL:-}" ]; then
+          root_version="$KSU_VERSION_FULL"
+        fi
 
         relative_kernel="$(realpath --relative-to="$drivers_dir" "$PWD/$directory/kernel")"
         ln -s "$relative_kernel" "$drivers_dir/kernelsu"

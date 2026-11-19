@@ -67,7 +67,7 @@ See **[Installation Guide](https://github.com/WildKernels/GKI_KernelSU_SUSFS/wik
 - **KernelSU-Next SUSFS Fork** — [pershoot](https://github.com/pershoot/KernelSU-Next)
 - **BakaSU** (formerly ReSukiSU) — [BakaSU](https://github.com/Baka-SU/BakaSU)
 - **FinaSU** — [LyraVoid](https://github.com/LyraVoid/FinaSU)
-- **Suki-SU Ultra** — [SukiSU Ultra](https://github.com/sukisu-ultra/sukisu-ultra)
+- **SukiSU Nova** (formerly SukiSU Ultra) — [SukiSU-Nova/SukiSU-Nova](https://github.com/SukiSU-Nova/SukiSU-Nova)
 - **KowSU** (KOWX712's KernelSU fork) — [KowSU](https://github.com/KOWX712/KernelSU)
 - **Magic-KSU** — [5ec1cff](https://github.com/5ec1cff/KernelSU)
 - **SUSFS** — [simonpunk](https://gitlab.com/simonpunk/susfs4ksu)

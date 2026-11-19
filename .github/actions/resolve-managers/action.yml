@@ -31,8 +31,8 @@ inputs:
     description: 'JSON array of the resolved build matrix (root_flavor/root_commit). When set, each flavor is matched to the exact commit the kernel embeds instead of a live tip.'
     required: false
     default: ''
-  sukisu_ultra_commit:
-    description: 'SukiSU-Ultra commit to match (empty = resolve the main tip)'
+  sukisu_nova_commit:
+    description: 'SukiSU Nova commit to match (empty = resolve the main tip)'
     required: false
     default: ''
   finasu_commit:
@@ -59,7 +59,7 @@ runs:
         INPUT_NEXT_SUSFS_COMMIT: ${{ inputs.next_susfs_commit }}
         INPUT_KSU_COMMIT: ${{ inputs.kernelsu_commit }}
         INPUT_BAKASU_COMMIT: ${{ inputs.bakasu_commit }}
-        INPUT_SUKISU_ULTRA_COMMIT: ${{ inputs.sukisu_ultra_commit }}
+        INPUT_SUKISU_NOVA_COMMIT: ${{ inputs.sukisu_nova_commit }}
         INPUT_FINASU_COMMIT: ${{ inputs.finasu_commit }}
       run: |
         set -euo pipefail
@@ -68,7 +68,7 @@ runs:
         # commit ae9a341 (nullptr-t-oss/composite_actions fetch_ksu_manager).
         # Each selected root must ship ALL manager APK builds. KernelSU-Next publishes
         # its manager APKs (manager + manager-spoofed) from the official dev-tip
-        # build-manager-ci run; kernelsu (KernelSU), BakaSU, SukiSU-Ultra, FinaSU and
+        # build-manager-ci run; kernelsu (KernelSU), BakaSU, SukiSU Nova, FinaSU and
         # KowSU expose theirs as CI-run artifacts. All are pinned to an exact commit.
         # No Root ships no manager.
         #
@@ -198,10 +198,17 @@ runs:
               branch="main"; want="Manager-release"
               resolve_stock "${mc:-${INPUT_BAKASU_COMMIT:-}}" bakasu_commit https://github.com/Baka-SU/BakaSU.git main
               ;;
-            sukisu-ultra)
-              owner="SukiSU-Ultra"; repo="SukiSU-Ultra"; wf="build-manager.yml"
+            sukisu-nova)
+              # The repository is still the same object after the rename, so the
+              # pre-move build-manager.yml runs (and their APK artifacts) remain
+              # reachable by this path. Upstream now publishes through a
+              # self-hosted Forgejo runner, so newer commits have no GitHub
+              # artifact: an exact-match lookup misses and the fallback below
+              # picks the newest run that does have one. The build metadata
+              # records both commits, so the pairing is never implied.
+              owner="SukiSU-Nova"; repo="SukiSU-Nova"; wf="build-manager.yml"
               branch="main"; want="Manager,Spoofed-Manager"
-              resolve_stock "${mc:-${INPUT_SUKISU_ULTRA_COMMIT:-}}" sukisu_ultra_commit https://github.com/SukiSU-Ultra/SukiSU-Ultra.git main
+              resolve_stock "${mc:-${INPUT_SUKISU_NOVA_COMMIT:-}}" sukisu_nova_commit https://github.com/SukiSU-Nova/SukiSU-Nova.git main
               ;;
             finasu)
               owner="LyraVoid"; repo="FinaSU"; wf="build-manager.yml"
@@ -271,7 +278,7 @@ runs:
           KernelSU-Next-SUSFS) resolve_one next-susfs; LIST=$(jq -c -n '[inputs]' <<< "$REC") ;;
           KernelSU) resolve_one kernelsu; LIST=$(jq -c -n '[inputs]' <<< "$REC") ;;
           BakaSU) resolve_one bakasu; LIST=$(jq -c -n '[inputs]' <<< "$REC") ;;
-          SukiSU-Ultra) resolve_one sukisu-ultra; LIST=$(jq -c -n '[inputs]' <<< "$REC") ;;
+          "SukiSU Nova"|SukiSU-Ultra) resolve_one sukisu-nova; LIST=$(jq -c -n '[inputs]' <<< "$REC") ;;
           KowSU) resolve_one kowsu; LIST=$(jq -c -n '[inputs]' <<< "$REC") ;;
           FinaSU) resolve_one finasu; LIST=$(jq -c -n '[inputs]' <<< "$REC") ;;
           *) echo "Skipping manager resolution (no root flavor / none)." >&2 ;;

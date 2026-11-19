@@ -33,7 +33,7 @@ KSU_CHECKOUTS = (
     "KernelSU",
     "KernelSU-Next",
     "BakaSU",
-    "SukiSU-Ultra",
+    "SukiSU-Nova",
     "KowSU",
     "FinaSU",
 )

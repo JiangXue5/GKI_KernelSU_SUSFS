@@ -54,7 +54,7 @@ body:
           - MKSU
           - KowSU
           - RKSU
-          - SukiSU
+          - SukiSU Nova
     validations:
         required: true
 

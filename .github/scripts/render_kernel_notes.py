@@ -38,7 +38,7 @@ ksun_branch=env("KSUN_BRANCH","dev-susfs")
 ksun_commit=env("KSUN_COMMIT","")
 ksu_commit=env("KSU_COMMIT","")
 bakasu_commit=env("BAKASU_COMMIT","")
-sukisu_ultra_commit=env("SUKISU_ULTRA_COMMIT","")
+sukisu_nova_commit=env("SUKISU_NOVA_COMMIT","")
 finasu_commit=env("FINASU_COMMIT","")
 kowsu_commit=env("KOWSU_COMMIT","")
 kernelsu_commit=env("KERNELSU_COMMIT","")
@@ -54,12 +54,12 @@ if env("USE_SUSFS","true")=="true":
     _next_url="https://github.com/pershoot/KernelSU-Next/commit/"
 else:
     _next_url="https://github.com/KernelSU-Next/KernelSU-Next/commit/"
-_root_urls={"next":_next_url,"kernelsu":"https://github.com/tiann/KernelSU/commit/","bakasu":"https://github.com/Baka-SU/BakaSU/commit/","sukisu-ultra":"https://github.com/SukiSU-Ultra/SukiSU-Ultra/commit/","finasu":"https://github.com/LyraVoid/FinaSU/commit/","kowsu":"https://github.com/KOWX712/KernelSU/commit/"}
-_root_commits={"next":_rmatrix.get("next","") or kernelsu_commit,"kernelsu":_rmatrix.get("kernelsu","") or ksu_commit,"bakasu":_rmatrix.get("bakasu","") or bakasu_commit,"sukisu-ultra":_rmatrix.get("sukisu-ultra","") or sukisu_ultra_commit,"finasu":_rmatrix.get("finasu","") or finasu_commit,"kowsu":_rmatrix.get("kowsu","") or kowsu_commit}
+_root_urls={"next":_next_url,"kernelsu":"https://github.com/tiann/KernelSU/commit/","bakasu":"https://github.com/Baka-SU/BakaSU/commit/","sukisu-nova":"https://github.com/SukiSU-Nova/SukiSU-Nova/commit/","finasu":"https://github.com/LyraVoid/FinaSU/commit/","kowsu":"https://github.com/KOWX712/KernelSU/commit/"}
+_root_commits={"next":_rmatrix.get("next","") or kernelsu_commit,"kernelsu":_rmatrix.get("kernelsu","") or ksu_commit,"bakasu":_rmatrix.get("bakasu","") or bakasu_commit,"sukisu-nova":_rmatrix.get("sukisu-nova","") or sukisu_nova_commit,"finasu":_rmatrix.get("finasu","") or finasu_commit,"kowsu":_rmatrix.get("kowsu","") or kowsu_commit}
 _flavors0=[m.get("flavor","") for m in parse_managers(env("MANAGER_LIST","")) if m.get("flavor","")]
 if not _flavors0:
-    _flavors0={"KernelSU-Next":["next"],"KernelSU":["kernelsu"],"BakaSU":["bakasu"],"SukiSU-Ultra":["sukisu-ultra"],"FinaSU":["finasu"],"KowSU":["kowsu"],"No Root":[],"All":["next","kernelsu","bakasu"]}.get(root,["next","kernelsu","bakasu"])
-_labels0={"next":"KernelSU-Next","kernelsu":"KernelSU","bakasu":"BakaSU","sukisu-ultra":"SukiSU-Ultra","finasu":"FinaSU","kowsu":"KowSU"}
+    _flavors0={"KernelSU-Next":["next"],"KernelSU":["kernelsu"],"BakaSU":["bakasu"],"SukiSU Nova":["sukisu-nova"],"FinaSU":["finasu"],"KowSU":["kowsu"],"No Root":[],"All":["next","kernelsu","bakasu"]}.get(root,["next","kernelsu","bakasu"])
+_labels0={"next":"KernelSU-Next","kernelsu":"KernelSU","bakasu":"BakaSU","sukisu-nova":"SukiSU Nova","finasu":"FinaSU","kowsu":"KowSU"}
 # Manager version numbers. tiann/KernelSU and its descendants (KernelSU-Next,
 # BakaSU) do not store a version string: the manager computes
 #   version = 30000 + <commits in the repo>
@@ -162,11 +162,11 @@ _sel=kbv_to_variant(kbv)
 variants=[_sel] if _sel else list(all_variants)
 sus_map={"android12-5.10":env("SUSFS_ANDROID12_5_10",""),"android13-5.10":env("SUSFS_ANDROID13_5_10",""),"android13-5.15":env("SUSFS_ANDROID13_5_15",""),"android14-5.15":env("SUSFS_ANDROID14_5_15",""),"android14-6.1":env("SUSFS_ANDROID14_6_1",""),"android15-6.6":env("SUSFS_ANDROID15_6_6",""),"android16-6.12":env("SUSFS_ANDROID16_6_12","")}
 sus_map_bakasu={"android12-5.10":env("SUSFS_ANDROID12_5_10_BAKASU",""),"android13-5.10":env("SUSFS_ANDROID13_5_10_BAKASU",""),"android13-5.15":env("SUSFS_ANDROID13_5_15_BAKASU",""),"android14-5.15":env("SUSFS_ANDROID14_5_15_BAKASU",""),"android14-6.1":env("SUSFS_ANDROID14_6_1_BAKASU",""),"android15-6.6":env("SUSFS_ANDROID15_6_6_BAKASU",""),"android16-6.12":env("SUSFS_ANDROID16_6_12_BAKASU","")}
-sus_map_sukisu_ultra={"android12-5.10":env("SUSFS_ANDROID12_5_10_SUKISU_ULTRA",""),"android13-5.10":env("SUSFS_ANDROID13_5_10_SUKISU_ULTRA",""),"android13-5.15":env("SUSFS_ANDROID13_5_15_SUKISU_ULTRA",""),"android14-5.15":env("SUSFS_ANDROID14_5_15_SUKISU_ULTRA",""),"android14-6.1":env("SUSFS_ANDROID14_6_1_SUKISU_ULTRA",""),"android15-6.6":env("SUSFS_ANDROID15_6_6_SUKISU_ULTRA",""),"android16-6.12":env("SUSFS_ANDROID16_6_12_SUKISU_ULTRA","")}
+sus_map_sukisu_nova={"android12-5.10":env("SUSFS_ANDROID12_5_10_SUKISU_NOVA",""),"android13-5.10":env("SUSFS_ANDROID13_5_10_SUKISU_NOVA",""),"android13-5.15":env("SUSFS_ANDROID13_5_15_SUKISU_NOVA",""),"android14-5.15":env("SUSFS_ANDROID14_5_15_SUKISU_NOVA",""),"android14-6.1":env("SUSFS_ANDROID14_6_1_SUKISU_NOVA",""),"android15-6.6":env("SUSFS_ANDROID15_6_6_SUKISU_NOVA",""),"android16-6.12":env("SUSFS_ANDROID16_6_12_SUKISU_NOVA","")}
 _flavors=[m.get("flavor","") for m in parse_managers(env("MANAGER_LIST","")) if m.get("flavor","")]
 if not _flavors:
-    _flavors={"KernelSU-Next":["next"],"KernelSU":["kernelsu"],"BakaSU":["bakasu"],"SukiSU-Ultra":["sukisu-ultra"],"KowSU":["kowsu"],"No Root":[],"All":["next","kernelsu","bakasu"]}.get(root,["next","kernelsu","bakasu"])
-_labels={"next":"KernelSU-Next","kernelsu":"KernelSU","bakasu":"BakaSU","sukisu-ultra":"SukiSU-Ultra","kowsu":"KowSU"}
+    _flavors={"KernelSU-Next":["next"],"KernelSU":["kernelsu"],"BakaSU":["bakasu"],"SukiSU Nova":["sukisu-nova"],"KowSU":["kowsu"],"No Root":[],"All":["next","kernelsu","bakasu"]}.get(root,["next","kernelsu","bakasu"])
+_labels={"next":"KernelSU-Next","kernelsu":"KernelSU","bakasu":"BakaSU","sukisu-nova":"SukiSU Nova","kowsu":"KowSU"}
 _susfs_url="https://gitlab.com/simonpunk/susfs4ksu"
 # SUSFS owns its own version string: kernel_patches/include/linux/susfs.h carries
 #   #define SUSFS_VERSION "v2.4.0"
@@ -203,7 +203,7 @@ for v in variants:
     _row=f"| gki-{v} |"
     for _fl in _flavors:
         # KowSU never ships SUSFS: render n/a rather than shared pins.
-        _sm={} if _fl=="kowsu" else (sus_map_sukisu_ultra if _fl=="sukisu-ultra" else (sus_map_bakasu if _fl=="bakasu" else sus_map))
+        _sm={} if _fl=="kowsu" else (sus_map_sukisu_nova if _fl=="sukisu-nova" else (sus_map_bakasu if _fl=="bakasu" else sus_map))
         sha=_sm.get(v,"")
         if sha:
             _ver=susfs_version_of(sha)
