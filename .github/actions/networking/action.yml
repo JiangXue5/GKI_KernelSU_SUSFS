@@ -30,13 +30,15 @@ runs:
     # "CONFIG_TCP_CONG_BBR3 is not declared in this tree - the patch did not
     # land, config skipped" on every 6.18 leg (3 warnings per run, run
     # 43959326934). Re-enable this step together with that branch's patches.
-    # - name: Apply BBRv3 Patches
-    #   uses: ./.github/actions/bbrv3
-    #   with:
-    #     version: ${{ inputs.version }}
-    #     kernel_version: ${{ inputs.kernel_version }}
-    #     sublevel: ${{ inputs.sublevel }}
-    #     os_patch_level: ${{ inputs.os_patch_level }}
+
+    - name: Apply BBRv3 Patches
+      if: inputs.version == 'android15-6.6'
+      uses: ./.github/actions/bbrv3
+      with:
+        version: ${{ inputs.version }}
+        kernel_version: ${{ inputs.kernel_version }}
+        sublevel: ${{ inputs.sublevel }}
+        os_patch_level: ${{ inputs.os_patch_level }}
 
     - name: Setup CIFS Configs
       uses: ./.github/actions/cifs
