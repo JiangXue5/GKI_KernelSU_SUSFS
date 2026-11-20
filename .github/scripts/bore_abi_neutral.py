@@ -8,10 +8,18 @@ initializer", scripts/genksyms/parse.y) but keeps the declaration and its
 attributes - so:
 
   * kernel/sched/features.h grows sched_feat_names[] and sched_feat_keys[] by
-    one entry. Both are exported data symbols and their type IS the array
-    length, so their CRC follows the size. PLACE_REL_DEADLINE defaults to
-    true, which means folding it to a compile-time constant keeps the
-    behaviour identical while leaving the two arrays the size stock has.
+    one entry. Both are exported and declared as `[__SCHED_FEAT_NR]`, so the
+    enum - one larger with the new entry - is part of their public type and
+    their CRC follows it.
+
+    Folding the entry into the two call sites keeps the DEFAULT behaviour
+    identical (the feature defaults to true and nothing in tree clears it),
+    but it does drop the runtime off-switch: the target builds with
+    CONFIG_SCHED_DEBUG=y, so stock BORE honours
+    "echo NO_PLACE_REL_DEADLINE > /sys/kernel/debug/sched/features" and this
+    port does not. That is a deliberate, documented trade-off, not an
+    equivalence claim - see FEATURE_NOTE for the reasoning and the two things
+    that must not be reintroduced without the ABI owners.
   * sysctl_sched_base_slice is re-declared `__read_mostly uint`. The
     attribute is part of the declaration text, so it alone moves the CRC of
     an exported symbol whose type never changed.
@@ -37,8 +45,19 @@ FEATURE_BLOCK = re.compile(
 )
 FEATURE_NOTE = """/*
  * PLACE_REL_DEADLINE is unconditional in this port. A SCHED_FEAT entry would
- * grow the exported sched_feat_keys[]/sched_feat_names[] (their type is the
- * array length, so their CRC follows it) and the GKI ABI gate rejects that.
+ * grow __SCHED_FEAT_NR, and that enum is part of the declared type of the
+ * exported sched_feat_keys[]/sched_feat_names[] (both are [__SCHED_FEAT_NR]),
+ * so the GKI ABI gate rejects the entry.
+ *
+ * Default behaviour is unchanged: the feature defaulted to true and nothing
+ * in tree ever cleared it. What is dropped, on purpose, is the runtime
+ * off-switch that CONFIG_SCHED_DEBUG exposes for this one feature:
+ *
+ *     echo NO_PLACE_REL_DEADLINE > /sys/kernel/debug/sched/features
+ *
+ * Keeping that switch requires the exported arrays GKI pins; adding a
+ * replacement knob would be a new, unverified scheduler interface. Neither
+ * should be reintroduced without the ABI owners.
  */
 """
 FEATURE_LINE = re.compile(r"[ \t]*SCHED_FEAT\(PLACE_REL_DEADLINE, true\)\n")
@@ -98,6 +117,9 @@ def features(path):
         return False
     open(path, "w", encoding="utf-8", errors="surrogateescape").write(out)
     print(f"bore-abi: {path}: SCHED_FEAT(PLACE_REL_DEADLINE) folded to a constant")
+    print("bore-abi: note: the debugfs off-switch for PLACE_REL_DEADLINE is "
+          "dropped on purpose (the target builds CONFIG_SCHED_DEBUG=y); the "
+          "default behaviour is unchanged")
     return True
 
 

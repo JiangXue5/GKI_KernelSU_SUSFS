@@ -151,8 +151,10 @@ static const unsigned int nsecs_per_tick   = 1000000000ULL / HZ;
 unsigned int sysctl_sched_min_base_slice   = CONFIG_MIN_BASE_SLICE_NS;
 /* Stock declaration text, on purpose: genksyms keeps the declaration (and
  * any attribute on it) and this symbol is exported, so `__read_mostly uint`
- * here moves the CRC of an otherwise unchanged symbol. The initial value is
- * recomputed by update_sysctl() anyway. */
+ * here moves the CRC of an otherwise unchanged symbol. Dropping the
+ * attribute moves the object between sections (.data..read_mostly -> .data);
+ * the value, the initialiser and the update_sysctl() path that recomputes it
+ * from min_base_slice_ns are untouched. */
 unsigned int sysctl_sched_base_slice       = nsecs_per_tick;
 #else // !CONFIG_SCHED_BORE
 unsigned int sysctl_sched_base_slice = {stock};

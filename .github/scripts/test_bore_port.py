@@ -467,6 +467,12 @@ def t10_abi_surface():
               "the SCHED_FEAT entry is gone (array size unchanged)")
         check("extern unsigned int sysctl_sched_base_slice;" in
               (sched / "sched.h").read_text(), "the extern keeps stock text")
+        note = feats.read_text()
+        check("off-switch" in note and "CONFIG_SCHED_DEBUG" in note
+              and "on purpose" in note,
+              "the in-tree note records the runtime switch it gives up")
+        check("dropped on purpose" in r.stdout,
+              "the step says it in the log too, not only in the source")
 
         before = fair.read_text(), feats.read_text()
         r = run_py("bore_abi_neutral.py", ".", cwd=tmp)
